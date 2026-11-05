@@ -1,0 +1,889 @@
+// Modelo canonico de Laundry. Unifica los dominios divergentes de App, Driver y Web.
+// Regla de diseno: ningun valor de negocio (tarifas, cortes, IVA, cargos) vive en codigo;
+// todo se parametriza en BusinessPolicy (versionada) o en tablas administrables.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------- Enums
+
+enum UserRole {
+  CLIENT
+  DRIVER
+  SUPERVISOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PASSWORD_CHANGE_REQUIRED
+}
+
+enum KycStatus {
+  NOT_SUBMITTED
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum FulfillmentMode {
+  HOME_HOME
+  HOME_STORE
+}
+
+enum PricingModel {
+  FIXED
+  PER_WEIGHT
+}
+
+enum PricingStatus {
+  ESTIMATED
+  PENDING_WEIGHT
+  CALCULATED
+  ADJUSTMENT_PENDING
+  FINAL
+}
+
+// Estado de negocio unico del pedido. El avance de cada tramo vive en FulfillmentLeg.
+enum OrderStatus {
+  PAYMENT_PENDING
+  CONFIRMED
+  PICKUP_ASSIGNED
+  HEADING_TO_PICKUP
+  ARRIVED_FOR_PICKUP
+  PICKED_UP
+  HEADING_TO_FACILITY
+  AT_FACILITY
+  WEIGHING
+  INSPECTION
+  PRICING_PENDING
+  CUSTOMER_APPROVAL_PENDING
+  IN_PROCESS
+  QUALITY_CONTROL
+  READY_FOR_DELIVERY
+  READY_FOR_PICKUP
+  DELIVERY_ASSIGNED
+  OUT_FOR_DELIVERY
+  ARRIVED_FOR_DELIVERY
+  DELIVERED
+  COMPLETED
+  INCIDENT
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING_AMOUNT
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+}
+
+enum LegKind {
+  INBOUND
+  OUTBOUND
+}
+
+enum LegMethod {
+  DRIVER
+  CUSTOMER
+}
+
+enum LegStatus {
+  PENDING
+  SCHEDULED
+  AWAITING_HANDOFF
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum SlotContext {
+  DRIVER_PICKUP
+  DRIVER_DELIVERY
+  FACILITY_PICKUP
+}
+
+enum HandoffType {
+  CUSTOMER_TO_DRIVER
+  DRIVER_TO_FACILITY
+  FACILITY_TO_DRIVER
+  DRIVER_TO_CUSTOMER
+  FACILITY_TO_CUSTOMER
+}
+
+enum HandoffStatus {
+  PENDING
+  ACTIVE
+  USED
+  EXPIRED
+  REVOKED
+  LOCKED
+}
+
+enum DriverStatus {
+  AVAILABLE
+  ON_SERVICE
+  BREAK
+  OFFLINE
+}
+
+enum LedgerEntryType {
+  CREDIT
+  DEBIT
+  REFUND
+  ADJUSTMENT
+}
+
+enum PaymentMethodKind {
+  WALLET
+  CARD
+  TRANSFER
+}
+
+enum ChargeType {
+  LATE_CANCELLATION
+  NO_SHOW
+  FAILED_PICKUP
+  OTHER
+}
+
+enum ChargeStatus {
+  PENDING
+  PAID
+  WAIVED
+}
+
+enum AdjustmentType {
+  SERVICE_RECLASSIFICATION
+  EXTRA_ITEM
+  WEIGHT_ADJUSTMENT
+  PRICE_ADJUSTMENT
+}
+
+enum AdjustmentStatus {
+  PENDING_CUSTOMER
+  APPROVED
+  REJECTED
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+enum RedemptionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  IN_REVIEW
+  RESOLVED
+  CLOSED
+}
+
+// ---------------------------------------------------------------- Identidad
+
+model User {
+  id           String     @id @default(uuid()) @db.Uuid
+  email        String     @unique
+  name         String
+  phone        String?
+  role         UserRole
+  status       UserStatus @default(ACTIVE)
+  passwordHash String
+  // Supervisor: sede a la que esta acotado.
+  facilityId   String?    @db.Uuid
+  facility     Facility?  @relation(fields: [facilityId], references: [id])
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  customer      Customer?
+  driver        Driver?
+  refreshTokens RefreshToken[]
+  auditLogs     AuditLog[]
+
+  @@index([role])
+  @@index([facilityId])
+}
+
+model RefreshToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Hash del token; el valor en claro nunca se guarda.
+  tokenHash String    @unique
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model Customer {
+  id                 String    @id @default(uuid()) @db.Uuid
+  userId             String    @unique @db.Uuid
+  user               User      @relation(fields: [userId], references: [id])
+  kycStatus          KycStatus @default(NOT_SUBMITTED)
+  kycRejectionReason String?
+  kycDocumentType    String?
+  kycDocumentNumber  String?
+  // Referencias opacas a almacenamiento; el proveedor aun no esta definido.
+  kycDocumentRef     String?
+  kycSelfieRef       String?
+  kycReviewedById    String?   @db.Uuid
+  kycReviewedAt      DateTime?
+  membershipPlanId   String?   @db.Uuid
+  membershipPlan     MembershipPlan? @relation(fields: [membershipPlanId], references: [id])
+  billingName        String?
+  billingTaxId       String?
+  billingEmail       String?
+  billingPhone       String?
+  billingAddress     String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  addresses      Address[]
+  orders         Order[]
+  ledger         LedgerEntry[]
+  paymentMethods PaymentMethod[]
+  charges        CustomerCharge[]
+  points         PointsLedgerEntry[]
+  redemptions    RewardRedemption[]
+  notifications  Notification[]
+
+  @@index([kycStatus])
+}
+
+model Address {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  title      String
+  fullAddress String
+  reference  String?
+  isPrimary  Boolean  @default(false)
+  latitude   Decimal  @db.Decimal(9, 6)
+  longitude  Decimal  @db.Decimal(9, 6)
+  deletedAt  DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([customerId])
+}
+
+model Driver {
+  id               String       @id @default(uuid()) @db.Uuid
+  userId           String       @unique @db.Uuid
+  user             User         @relation(fields: [userId], references: [id])
+  facilityId       String       @db.Uuid
+  facility         Facility     @relation(fields: [facilityId], references: [id])
+  status           DriverStatus @default(OFFLINE)
+  vehicle          String?
+  plate            String?
+  latitude         Decimal?     @db.Decimal(9, 6)
+  longitude        Decimal?     @db.Decimal(9, 6)
+  locationAt       DateTime?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  zones   DriverZone[]
+  legs    FulfillmentLeg[]
+  incidents Incident[]
+
+  @@index([facilityId, status])
+}
+
+// ---------------------------------------------------------------- Organizacion y geografia
+
+model Zone {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  // Vertices [{lat,lng}]. Migrable a PostGIS cuando se requiera consulta espacial.
+  polygon   Json
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  facilities Facility[]
+  drivers    DriverZone[]
+}
+
+model Facility {
+  id           String   @id @default(uuid()) @db.Uuid
+  zoneId       String   @db.Uuid
+  zone         Zone     @relation(fields: [zoneId], references: [id])
+  name         String
+  address      String
+  city         String?
+  taxId        String?
+  phone        String?
+  managerName  String?
+  openingHours Json?
+  latitude     Decimal  @db.Decimal(9, 6)
+  longitude    Decimal  @db.Decimal(9, 6)
+  // Capacidad de recepcion diaria; sin valor por defecto.
+  dailyCapacity Int?
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  users    User[]
+  drivers  Driver[]
+  slots    TimeSlot[]
+  orders   Order[]
+  handoffs Handoff[]
+
+  @@index([zoneId])
+}
+
+model DriverZone {
+  driverId String @db.Uuid
+  driver   Driver @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  zoneId   String @db.Uuid
+  zone     Zone   @relation(fields: [zoneId], references: [id], onDelete: Cascade)
+
+  @@id([driverId, zoneId])
+}
+
+// ---------------------------------------------------------------- Politica y catalogo (parametrizables)
+
+// Cada cambio crea una version nueva; solo una esta activa. Los campos nulos significan
+// "no configurado": las reglas que dependen de ellos se rechazan hasta que el administrador
+// los defina, en lugar de asumir un valor.
+model BusinessPolicy {
+  id        String   @id @default(uuid()) @db.Uuid
+  version   Int      @unique
+  active    Boolean  @default(false)
+  timezone  String
+
+  minimumOrderAmount Decimal? @db.Decimal(12, 2)
+  taxRate            Decimal? @db.Decimal(6, 4)
+  taxIncluded        Boolean?
+  pickupFee          Decimal? @db.Decimal(12, 2)
+  deliveryFee        Decimal? @db.Decimal(12, 2)
+  pricePerPound      Decimal? @db.Decimal(12, 4)
+  // Minutos antes de la franja a partir de los cuales ya no se permite cambiar o cancelar sin cargo.
+  cutoffMinutes      Int?
+  lateCancellationFee Decimal? @db.Decimal(12, 2)
+  noShowFee          Decimal? @db.Decimal(12, 2)
+  failedPickupFee    Decimal? @db.Decimal(12, 2)
+  blockNewOrdersOnCharges Boolean @default(false)
+  enforceDriverLimit Boolean  @default(false)
+  driverLimit        Int?
+  driverMayReorder   Boolean  @default(false)
+  requireStorePickupSlot Boolean @default(false)
+  handoffMaxAttempts Int?
+  handoffTtlMinutes  Int?
+  pointsPerCurrencyUnit Decimal? @db.Decimal(8, 2)
+  walletTopUpMin     Decimal? @db.Decimal(12, 2)
+  walletTopUpMax     Decimal? @db.Decimal(12, 2)
+
+  createdById String?  @db.Uuid
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([active])
+}
+
+model GarmentType {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String   @unique
+  basePrice Decimal  @db.Decimal(12, 2)
+  icon      String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items OrderItem[]
+}
+
+model ServiceType {
+  id         String   @id @default(uuid()) @db.Uuid
+  name       String   @unique
+  extraPrice Decimal  @db.Decimal(12, 2)
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  items OrderItem[]
+}
+
+model Extra {
+  id          String   @id @default(uuid()) @db.Uuid
+  name        String   @unique
+  description String?
+  price       Decimal  @db.Decimal(12, 2)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orderExtras OrderExtra[]
+}
+
+model Promotion {
+  id             String       @id @default(uuid()) @db.Uuid
+  code           String       @unique
+  description    String?
+  discountType   DiscountType
+  discountValue  Decimal      @db.Decimal(12, 2)
+  minOrderAmount Decimal?     @db.Decimal(12, 2)
+  validFrom      DateTime?
+  validUntil     DateTime?
+  maxUses        Int?
+  active         Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  orders Order[]
+}
+
+model MembershipPlan {
+  id                     String   @id @default(uuid()) @db.Uuid
+  name                   String   @unique
+  priceMonthly           Decimal  @db.Decimal(12, 2)
+  weeklyPickups          Int?
+  garmentDiscountPercent Decimal  @db.Decimal(5, 2)
+  benefits               String[]
+  active                 Boolean  @default(true)
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  customers Customer[]
+}
+
+model Reward {
+  id          String   @id @default(uuid()) @db.Uuid
+  title       String
+  description String?
+  category    String?
+  pointsCost  Int
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  redemptions RewardRedemption[]
+}
+
+// ---------------------------------------------------------------- Agenda
+
+model TimeSlot {
+  id            String      @id @default(uuid()) @db.Uuid
+  facilityId    String      @db.Uuid
+  facility      Facility    @relation(fields: [facilityId], references: [id])
+  context       SlotContext
+  // Fecha operativa (dia calendario en la zona horaria de la politica).
+  date          DateTime    @db.Date
+  startTime     String
+  endTime       String
+  capacity      Int
+  reservedCount Int         @default(0)
+  active        Boolean     @default(true)
+
+  reservations SlotReservation[]
+  legs         FulfillmentLeg[]
+
+  @@unique([facilityId, context, date, startTime, endTime])
+  @@index([date, context])
+}
+
+model SlotReservation {
+  id        String          @id @default(uuid()) @db.Uuid
+  slotId    String          @db.Uuid
+  slot      TimeSlot        @relation(fields: [slotId], references: [id])
+  legId     String          @db.Uuid
+  leg       FulfillmentLeg  @relation(fields: [legId], references: [id])
+  active    Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  releasedAt DateTime?
+
+  @@index([slotId, active])
+  @@index([legId])
+}
+
+// ---------------------------------------------------------------- Pedido
+
+model Order {
+  id          String      @id @default(uuid()) @db.Uuid
+  // Numero legible y secuencial para el usuario (SOL-xxxx se arma en la capa de presentacion).
+  number      Int         @unique @default(autoincrement())
+  customerId  String      @db.Uuid
+  customer    Customer    @relation(fields: [customerId], references: [id])
+  facilityId  String      @db.Uuid
+  facility    Facility    @relation(fields: [facilityId], references: [id])
+  mode        FulfillmentMode
+  status      OrderStatus @default(CONFIRMED)
+  priority    Boolean     @default(false)
+  notes       String?
+
+  pricingModel     PricingModel
+  pricingStatus    PricingStatus
+  paymentStatus    PaymentStatus
+  paymentMethodKind PaymentMethodKind?
+  estimatedWeightLb Decimal? @db.Decimal(10, 2)
+  // Precio por libra vigente al crear: congela la politica aplicada.
+  pricePerPound     Decimal? @db.Decimal(12, 4)
+  itemsSubtotal     Decimal  @default(0) @db.Decimal(12, 2)
+  extrasTotal       Decimal  @default(0) @db.Decimal(12, 2)
+  discount          Decimal  @default(0) @db.Decimal(12, 2)
+  membershipDiscount Decimal @default(0) @db.Decimal(12, 2)
+  logisticsFee      Decimal  @default(0) @db.Decimal(12, 2)
+  tax               Decimal  @default(0) @db.Decimal(12, 2)
+  total             Decimal  @default(0) @db.Decimal(12, 2)
+  policyVersion     Int
+
+  promotionId String?   @db.Uuid
+  promotion   Promotion? @relation(fields: [promotionId], references: [id])
+
+  // Control de concurrencia optimista: toda mutacion incrementa la version.
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  cancelledAt DateTime?
+
+  items        OrderItem[]
+  extras       OrderExtra[]
+  legs         FulfillmentLeg[]
+  events       OrderEvent[]
+  handoffs     Handoff[]
+  weights      WeightMeasurement[]
+  adjustments  PriceAdjustment[]
+  ledger       LedgerEntry[]
+  charges      CustomerCharge[]
+  incidents    Incident[]
+  messages     ChatMessage[]
+  notifications Notification[]
+
+  @@index([customerId, status])
+  @@index([facilityId, status])
+  @@index([status])
+}
+
+model OrderItem {
+  id          String      @id @default(uuid()) @db.Uuid
+  orderId     String      @db.Uuid
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  garmentId   String      @db.Uuid
+  garment     GarmentType @relation(fields: [garmentId], references: [id])
+  serviceId   String      @db.Uuid
+  service     ServiceType @relation(fields: [serviceId], references: [id])
+  quantity    Int
+  // Precio unitario congelado al crear.
+  unitPrice   Decimal     @db.Decimal(12, 2)
+  notes       String?
+
+  @@index([orderId])
+}
+
+model OrderExtra {
+  id      String @id @default(uuid()) @db.Uuid
+  orderId String @db.Uuid
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  extraId String @db.Uuid
+  extra   Extra  @relation(fields: [extraId], references: [id])
+  price   Decimal @db.Decimal(12, 2)
+
+  @@index([orderId])
+}
+
+// Un tramo (recogida o entrega) con su direccion, franja, asignacion y avance propios.
+model FulfillmentLeg {
+  id          String    @id @default(uuid()) @db.Uuid
+  orderId     String    @db.Uuid
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  kind        LegKind
+  method      LegMethod
+  status      LegStatus @default(SCHEDULED)
+  addressText String
+  latitude    Decimal   @db.Decimal(9, 6)
+  longitude   Decimal   @db.Decimal(9, 6)
+  scheduledDate DateTime @db.Date
+  slotId      String?   @db.Uuid
+  slot        TimeSlot? @relation(fields: [slotId], references: [id])
+  driverId    String?   @db.Uuid
+  driver      Driver?   @relation(fields: [driverId], references: [id])
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  reservations SlotReservation[]
+
+  @@unique([orderId, kind])
+  @@index([driverId, status])
+}
+
+model OrderEvent {
+  id          String       @id @default(uuid()) @db.Uuid
+  orderId     String       @db.Uuid
+  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  status      OrderStatus
+  title       String
+  description String?
+  actorId     String?      @db.Uuid
+  actorRole   UserRole?
+  createdAt   DateTime     @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+// ---------------------------------------------------------------- Custodia
+
+model Handoff {
+  id          String        @id @default(uuid()) @db.Uuid
+  orderId     String        @db.Uuid
+  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  facilityId  String        @db.Uuid
+  facility    Facility      @relation(fields: [facilityId], references: [id])
+  type        HandoffType
+  status      HandoffStatus @default(PENDING)
+  // Hashes: el QR y el codigo manual se muestran una sola vez al generarse.
+  qrTokenHash String        @unique
+  codeHash    String
+  generation  Int           @default(1)
+  attempts    Int           @default(0)
+  maxAttempts Int
+  activatedAt DateTime?
+  expiresAt   DateTime?
+  usedAt      DateTime?
+  usedById    String?       @db.Uuid
+  receivedCount Int?
+  declaredCount Int?
+  recipientName String?
+  recipientRelationship String?
+  notes       String?
+  evidenceRef String?
+  previousId  String?       @db.Uuid
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  audits HandoffAudit[]
+
+  @@index([orderId, type, status])
+}
+
+model HandoffAudit {
+  id        String   @id @default(uuid()) @db.Uuid
+  handoffId String   @db.Uuid
+  handoff   Handoff  @relation(fields: [handoffId], references: [id], onDelete: Cascade)
+  action    String
+  actorId   String?  @db.Uuid
+  actorRole UserRole?
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([handoffId])
+}
+
+// ---------------------------------------------------------------- Peso, ajustes y dinero
+
+model WeightMeasurement {
+  id         String   @id @default(uuid()) @db.Uuid
+  orderId    String   @db.Uuid
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  weightGrams Int
+  measuredById String? @db.Uuid
+  createdAt  DateTime @default(now())
+
+  @@index([orderId])
+}
+
+model PriceAdjustment {
+  id                       String           @id @default(uuid()) @db.Uuid
+  orderId                  String           @db.Uuid
+  order                    Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  type                     AdjustmentType
+  internalReason           String
+  customerMessage          String
+  amountDifference         Decimal          @db.Decimal(12, 2)
+  requiresCustomerApproval Boolean          @default(true)
+  status                   AdjustmentStatus @default(PENDING_CUSTOMER)
+  createdById              String?          @db.Uuid
+  createdAt                DateTime         @default(now())
+  resolvedAt               DateTime?
+
+  @@index([orderId, status])
+}
+
+// Libro mayor inmutable. El saldo de la billetera se deriva de la suma de sus entradas.
+model LedgerEntry {
+  id         String          @id @default(uuid()) @db.Uuid
+  customerId String          @db.Uuid
+  customer   Customer        @relation(fields: [customerId], references: [id])
+  orderId    String?         @db.Uuid
+  order      Order?          @relation(fields: [orderId], references: [id])
+  chargeId   String?         @db.Uuid
+  charge     CustomerCharge? @relation(fields: [chargeId], references: [id])
+  type       LedgerEntryType
+  // Positivo = abono a favor del cliente; negativo = cargo.
+  amount     Decimal         @db.Decimal(12, 2)
+  reference  String
+  description String?
+  // Evita duplicar el mismo movimiento ante reintentos.
+  idempotencyKey String?     @unique
+  createdAt  DateTime        @default(now())
+
+  @@index([customerId, createdAt])
+}
+
+model PaymentMethod {
+  id         String            @id @default(uuid()) @db.Uuid
+  customerId String            @db.Uuid
+  customer   Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  kind       PaymentMethodKind
+  holder     String
+  last4      String
+  // Referencia del proveedor de pagos (pendiente de definir); nunca el numero completo.
+  providerToken String?
+  brand      String?
+  expiry     String?
+  bank       String?
+  isDefault  Boolean           @default(false)
+  deletedAt  DateTime?
+  createdAt  DateTime          @default(now())
+
+  @@index([customerId])
+}
+
+model CustomerCharge {
+  id         String       @id @default(uuid()) @db.Uuid
+  customerId String       @db.Uuid
+  customer   Customer     @relation(fields: [customerId], references: [id])
+  orderId    String?      @db.Uuid
+  order      Order?       @relation(fields: [orderId], references: [id])
+  type       ChargeType
+  amount     Decimal      @db.Decimal(12, 2)
+  status     ChargeStatus @default(PENDING)
+  reason     String
+  waivedReason String?
+  createdAt  DateTime     @default(now())
+  paidAt     DateTime?
+
+  ledger LedgerEntry[]
+
+  @@index([customerId, status])
+}
+
+model PointsLedgerEntry {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @db.Uuid
+  customer   Customer @relation(fields: [customerId], references: [id])
+  orderId    String?  @db.Uuid
+  // Positivo = suma; negativo = canje o reversion.
+  points     Int
+  reason     String
+  createdAt  DateTime @default(now())
+
+  @@index([customerId, createdAt])
+}
+
+model RewardRedemption {
+  id         String           @id @default(uuid()) @db.Uuid
+  customerId String           @db.Uuid
+  customer   Customer         @relation(fields: [customerId], references: [id])
+  rewardId   String           @db.Uuid
+  reward     Reward           @relation(fields: [rewardId], references: [id])
+  pointsCost Int
+  status     RedemptionStatus @default(PENDING)
+  reviewedById String?        @db.Uuid
+  reviewReason String?
+  createdAt  DateTime         @default(now())
+  reviewedAt DateTime?
+
+  @@index([customerId, status])
+}
+
+// ---------------------------------------------------------------- Soporte y trazabilidad
+
+model Incident {
+  id          String           @id @default(uuid()) @db.Uuid
+  orderId     String           @db.Uuid
+  order       Order            @relation(fields: [orderId], references: [id])
+  driverId    String?          @db.Uuid
+  driver      Driver?          @relation(fields: [driverId], references: [id])
+  type        String
+  severity    IncidentSeverity
+  status      IncidentStatus   @default(OPEN)
+  description String
+  resolution  String?
+  evidenceRefs String[]
+  createdById String?          @db.Uuid
+  createdAt   DateTime         @default(now())
+  resolvedAt  DateTime?
+
+  @@index([orderId])
+  @@index([status, severity])
+}
+
+model ChatMessage {
+  id         String   @id @default(uuid()) @db.Uuid
+  orderId    String   @db.Uuid
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  senderId   String   @db.Uuid
+  senderRole UserRole
+  text       String
+  createdAt  DateTime @default(now())
+
+  @@index([orderId, createdAt])
+}
+
+model Notification {
+  id         String    @id @default(uuid()) @db.Uuid
+  customerId String    @db.Uuid
+  customer   Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  orderId    String?   @db.Uuid
+  order      Order?    @relation(fields: [orderId], references: [id])
+  category   String
+  title      String
+  body       String
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([customerId, readAt])
+}
+
+model AuditLog {
+  id         String    @id @default(uuid()) @db.Uuid
+  actorId    String?   @db.Uuid
+  actor      User?     @relation(fields: [actorId], references: [id])
+  actorRole  UserRole?
+  action     String
+  entity     String
+  entityId   String?
+  reason     String?
+  before     Json?
+  after      Json?
+  createdAt  DateTime  @default(now())
+
+  @@index([entity, entityId])
+  @@index([actorId, createdAt])
+}
+
+// Reintentos seguros de comandos (pagos, creacion de pedidos).
+model IdempotencyKey {
+  key        String   @id
+  userId     String   @db.Uuid
+  endpoint   String
+  responseStatus Int
+  responseBody Json
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}

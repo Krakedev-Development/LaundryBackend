@@ -1,0 +1,10 @@
+allowBuilds:
+  argon2: true
+  prisma: true
+  "@prisma/engines": true
+  "@prisma/client": true
+  "@nestjs/core": false
+  "@scarf/scarf": false
+  "@parcel/watcher": false
+  esbuild: true
+  workerd: false
