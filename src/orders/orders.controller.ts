@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -37,7 +38,12 @@ export class OrdersController {
     @Body() dto: CreateOrderDto,
     @Headers('idempotency-key') key?: string,
   ) {
-    return this.orders.create(user, dto, key?.trim() || undefined);
+    const idempotencyKey = key?.trim() || undefined;
+    if (idempotencyKey && !/^[A-Za-z0-9._:-]{8,128}$/.test(idempotencyKey))
+      throw new BadRequestException(
+        'Idempotency-Key debe tener entre 8 y 128 caracteres (letras, números, . _ : -).',
+      );
+    return this.orders.create(user, dto, idempotencyKey);
   }
 
   @Get()

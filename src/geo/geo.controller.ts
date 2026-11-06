@@ -19,7 +19,9 @@ import {
   UpdateFacilityDto,
   UpdateZoneDto,
 } from './dto/geo.dto';
-import { GeoService } from './geo.service';
+import { GeoService, publicFacility } from './geo.service';
+
+const isStaff = (u: AuthUser) => u.role === 'ADMIN' || u.role === 'SUPERVISOR';
 
 // Lectura: cualquier usuario autenticado (los inactivos solo los ve el administrador).
 // Escritura: solo administrador. No hay borrado: se desactiva para conservar el historial.
@@ -49,16 +51,22 @@ export class GeoController {
   }
 
   @Get('facilities')
-  facilities(
+  async facilities(
     @CurrentUser() user: AuthUser,
     @Query('zoneId') zoneId?: string,
   ) {
-    return this.geo.listFacilities(user.role === 'ADMIN', zoneId);
+    const rows = await this.geo.listFacilities(user.role === 'ADMIN', zoneId);
+    // Datos administrativos (NIT, encargado, capacidad) solo para el personal.
+    return isStaff(user) ? rows : rows.map(publicFacility);
   }
 
   @Get('facilities/:id')
-  facility(@Param('id', ParseUUIDPipe) id: string) {
-    return this.geo.getFacility(id);
+  async facility(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    const facility = await this.geo.getFacility(id);
+    return isStaff(user) ? facility : publicFacility(facility);
   }
 
   @Roles('ADMIN')

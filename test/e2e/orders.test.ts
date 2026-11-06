@@ -193,15 +193,15 @@ describe('creación de pedidos', () => {
   it('la idempotencia evita pedidos duplicados', async () => {
     const b = await body(c);
     const before = await t.prisma.order.count();
-    const first = await createOrder(c.token, b, 'clave-1').expect(201);
-    const again = await createOrder(c.token, b, 'clave-1').expect(201);
+    const first = await createOrder(c.token, b, 'clave-idempotente-1').expect(201);
+    const again = await createOrder(c.token, b, 'clave-idempotente-1').expect(201);
     assert.equal(first.body.id, again.body.id);
     assert.equal((await t.prisma.order.count()) - before, 1);
     // Concurrentes con otra clave: un solo pedido y misma respuesta.
     const b2 = await body(c);
     const [r1, r2] = await Promise.all([
-      createOrder(c.token, b2, 'clave-2'),
-      createOrder(c.token, b2, 'clave-2'),
+      createOrder(c.token, b2, 'clave-idempotente-2'),
+      createOrder(c.token, b2, 'clave-idempotente-2'),
     ]);
     assert.equal(r1.body.id, r2.body.id);
   });

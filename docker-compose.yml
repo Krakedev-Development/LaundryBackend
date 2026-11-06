@@ -7,7 +7,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD en .env}
       POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB en .env}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Solo accesible desde esta máquina; nunca publicar la base en todas las interfaces.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - laundry_pgdata:/var/lib/postgresql/data
 volumes:

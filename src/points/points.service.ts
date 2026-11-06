@@ -108,6 +108,7 @@ export class PointsService {
         where: parsed ? { status: parsed } : {},
         include: { reward: { select: { title: true } } },
         orderBy: { createdAt: 'desc' },
+        take: 200,
       });
     const customer = await this.customers.customerOf(user);
     return this.prisma.rewardRedemption.findMany({

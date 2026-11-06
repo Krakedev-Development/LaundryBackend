@@ -13,6 +13,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import type { CreateIncidentDto, SetIncidentStatusDto } from './dto/incidents.dto';
 
 type Tx = Prisma.TransactionClient;
+// Tope de filas por consulta mientras los listados no tengan paginación.
+const LIST_LIMIT = 200;
 const isStaff = (u: AuthUser) => u.role === 'ADMIN' || u.role === 'SUPERVISOR';
 
 // Estados en los que una incidencia puede retener el pedido (pausar su flujo).
@@ -106,6 +108,7 @@ export class IncidentsService {
     return this.prisma.incident.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }],
+      take: LIST_LIMIT,
     });
   }
 

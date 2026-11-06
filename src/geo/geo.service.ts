@@ -34,6 +34,14 @@ export function pointInPolygon(point: LatLng, polygon: LatLng[]): boolean {
   return inside;
 }
 
+// Campos de una sede visibles para clientes y choferes (sin datos administrativos).
+export function publicFacility<T extends Record<string, unknown>>(f: T) {
+  const {
+    id, zoneId, name, address, city, phone, openingHours, latitude, longitude, active,
+  } = f as Record<string, unknown>;
+  return { id, zoneId, name, address, city, phone, openingHours, latitude, longitude, active };
+}
+
 @Injectable()
 export class GeoService {
   constructor(private readonly prisma: PrismaService) {}

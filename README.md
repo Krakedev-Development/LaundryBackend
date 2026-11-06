@@ -47,6 +47,16 @@ Fase 5: KYC, puntos, incidencias, chat y notificaciones.
 
 Pendiente: despacho avanzado (reasignación, zonas de chofer, ubicación en vivo), cambio de franja con regla de corte, proveedor de pagos y almacenamiento, capacidad diaria de la sede, y un barrido de seguridad previo a conectar los frontends.
 
+## Seguridad
+
+- Permisos: todas las rutas exigen sesión salvo las públicas; los roles se declaran por ruta y una matriz de pruebas (`test/e2e/security.test.ts`) verifica 401 sin sesión y 403 para cada rol no autorizado. El rol y el estado se leen de la base en cada petición: suspender una cuenta surte efecto de inmediato.
+- Aislamiento: clientes, choferes y supervisores solo acceden a sus propios pedidos, direcciones, cargos y notificaciones (404 en vez de 403 para no revelar existencia).
+- Exposición de datos: clientes y choferes ven solo campos públicos de sede y de política; los hashes y secretos nunca salen en respuestas.
+- Autenticación: argon2, JWT con algoritmo fijo (HS256) y vida corta, refresh con rotación y detección de reuso; límites de intentos por IP y, en el inicio de sesión, por IP y cuenta.
+- Base de datos: el contenedor solo escucha en 127.0.0.1.
+- Entradas: lista blanca de campos, textos recortados antes de validar, claves de idempotencia acotadas, listados con tope.
+- Pendiente de decidir: cifrado en reposo de datos personales (documento KYC), política de bloqueo prolongado por intentos fallidos, y rotación de secretos.
+
 ## Pruebas
 
 `pnpm test` (unitarias) y `pnpm test:e2e` (contra la base `<DB>_test`, que se crea y migra sola; nunca toca la de desarrollo). Usan el runner nativo de Node sobre el código compilado. `pnpm test:all` ejecuta ambas.

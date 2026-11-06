@@ -60,6 +60,7 @@ export class KycService {
     return this.prisma.customer.findMany({
       where: { kycStatus: (status ?? 'PENDING') as 'PENDING' },
       orderBy: { updatedAt: 'asc' },
+      take: 200,
       select: {
         id: true,
         kycStatus: true,
