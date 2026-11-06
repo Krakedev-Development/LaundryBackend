@@ -10,7 +10,7 @@ Requiere Node 22.13 o superior, pnpm y Docker.
 
 ```powershell
 pnpm install
-copy .env.example .env      # completar secretos (>= 32 caracteres, distintos entre sí) y contraseñas
+copy .env.example .env      # completar (incluye THROTTLE_*, AUTH_THROTTLE_LIMIT) secretos (>= 32 caracteres, distintos entre sí) y contraseñas
 docker compose up -d        # PostgreSQL en el puerto POSTGRES_PORT (5433 por defecto)
 pnpm prisma:deploy          # aplica migraciones
 pnpm db:bootstrap           # crea el primer administrador (BOOTSTRAP_ADMIN_*)
@@ -23,7 +23,33 @@ El administrador de arranque queda en estado `PASSWORD_CHANGE_REQUIRED`: debe ca
 
 Implementado: autenticación (registro de clientes, login, refresh con rotación y detección de reuso, cambio de contraseña, argon2), roles (CLIENT, DRIVER, SUPERVISOR, ADMIN), alta de choferes y personal por el administrador, política de negocio versionada con auditoría, y el esquema Prisma canónico de todo el dominio.
 
-Pendiente (el esquema ya lo modela): sedes y zonas, catálogo, agenda y cupos, pedidos y máquina de estados, custodia (QR y códigos), pesaje y ajustes, billetera y cargos, KYC, puntos y canjes, incidencias, chat y notificaciones.
+Fase 1 (administrable solo por ADMIN, lectura para cualquier usuario autenticado; sin borrado, se desactiva): zonas con polígono y resolución de cobertura por coordenada (`/zones`), sedes (`/facilities`), catálogo de prendas, servicios, extras, membresías y recompensas (`/catalog/*`) y promociones (`/catalog/promotions`, solo administrador). Cada cambio queda en `AuditLog`.
+
+Fase 2: agenda (`/slots`). Franjas por sede, contexto (recogida con chofer, entrega con chofer, retiro en sede) y fecha, sin solapamientos ni fechas pasadas (según la zona horaria de la política). El supervisor gestiona solo su sede; el cliente ve únicamente franjas futuras con cupo y sin capacidad interna. `SlotsService.reserveCapacity/releaseCapacity` reservan cupos de forma atómica (la condición vive en el `UPDATE`) y los usará la creación de pedidos.
+
+Fase 3: direcciones del cliente (`/customers/me/addresses`) y pedidos (`/orders`). Creación con precio calculado solo en el servidor (Decimal; prendas o peso estimado, extras, membresía, promoción, logística e IVA desde la política), cobertura por polígono de zona, reserva atómica de cupos, congelado de precios y de `policyVersion`, e idempotencia por cabecera `Idempotency-Key`. Máquina de estados canónica con rol autorizado por transición y concurrencia optimista (`expectedVersion`); las transiciones de pago, despacho, custodia, pesaje y ajustes están protegidas por una "puerta": el endpoint genérico no las ejecuta, las dispara el módulo dueño de la evidencia. Despacho básico (`/orders/:id/assign`, respeta el límite de servicios por chofer de la política), programación de entrega, y cancelación con cargo por cancelación tardía y bloqueo por cargos según la política. Sin monto mínimo configurado no se impone ninguno.
+
+Fase 4: billetera y pago, custodia, pesaje y ajustes.
+
+- Billetera (`/wallet`): saldo derivado del libro mayor inmutable; abono manual del administrador con comprobante e idempotencia (mientras no haya proveedor de pagos); pago de cargos; condonación por el administrador. Los movimientos de un cliente se serializan con bloqueo de fila, así que pagos simultáneos no sobregiran.
+- Pago (`POST /orders/:id/pay`): salda con la billetera lo pendiente y confirma el pedido; sirve también para la diferencia por ajustes. Cancelar un pedido pagado reembolsa a la billetera. `/complete` exige cero saldo pendiente.
+- Custodia (`/orders/:id/handoffs/issue|verify`, `/handoffs/:id/revoke`): cinco tipos de traspaso, cada uno con quién presenta (cliente o chofer) y quién verifica (chofer o personal). Código de 6 dígitos y token QR guardados solo como HMAC/hash; vigencia e intentos máximos vienen de la política; el bloqueo por intentos fallidos persiste aunque la petición falle; toda acción queda en `HandoffAudit`. Verificar correctamente mueve el pedido (puerta HANDOFF).
+- Pesaje y ajustes (`/orders/:id/weight|adjustments|pricing/resolve`): en pedidos por peso se recalcula con la política y el precio por libra congelados; un aumento requiere aprobación del cliente, una rebaja se aplica sola y se devuelve a la billetera. Los ajustes manuales se expresan como impacto en el total (impuesto incluido).
+
+Fase 5: KYC, puntos, incidencias, chat y notificaciones.
+
+- KYC (`/kyc`): el cliente envía datos y referencias opacas de documentos (el almacenamiento no está definido); el personal revisa desde una cola, el rechazo exige motivo y se puede reenviar. La política `requireKycForOrders` (apagada por defecto) exige identidad aprobada para crear pedidos.
+- Puntos (`/points`, `/redemptions`): se acumulan al completar el pedido con la tasa de la política congelada en él; sin tasa configurada no se acumulan. Canjear reserva los puntos (con bloqueo de fila), el rechazo los devuelve.
+- Incidencias (`/incidents`): cualquier participante reporta; chofer o personal pueden retener el pedido (estado `INCIDENT`, el flujo se pausa) y al resolverla vuelve al estado previo. Ciclo OPEN, IN_REVIEW, RESOLVED, CLOSED.
+- Chat (`/orders/:id/messages`): hilo por pedido entre cliente, chofer asignado y personal de la sede; se cierra con el pedido.
+- Notificaciones (`/notifications`): avisos al cliente por hitos del pedido, KYC, canjes, incidencias y mensajes.
+- Todo cuerpo de petición se recorta antes de validar (excepto contraseñas).
+
+Pendiente: despacho avanzado (reasignación, zonas de chofer, ubicación en vivo), cambio de franja con regla de corte, proveedor de pagos y almacenamiento, capacidad diaria de la sede, y un barrido de seguridad previo a conectar los frontends.
+
+## Pruebas
+
+`pnpm test` (unitarias) y `pnpm test:e2e` (contra la base `<DB>_test`, que se crea y migra sola; nunca toca la de desarrollo). Usan el runner nativo de Node sobre el código compilado. `pnpm test:all` ejecuta ambas.
 
 ## Convenciones
 

@@ -26,3 +26,4 @@ lerna-debug.log*
 # Prisma client generado (se reconstruye con pnpm prisma:generate)
 /src/generated
 *.tsbuildinfo
+/dist-test

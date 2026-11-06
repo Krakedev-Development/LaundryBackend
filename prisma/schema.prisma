@@ -392,6 +392,8 @@ model BusinessPolicy {
   driverLimit        Int?
   driverMayReorder   Boolean  @default(false)
   requireStorePickupSlot Boolean @default(false)
+  // Si es verdadero, solo clientes con identidad aprobada (KYC) pueden crear pedidos.
+  requireKycForOrders Boolean @default(false)
   handoffMaxAttempts Int?
   handoffTtlMinutes  Int?
   pointsPerCurrencyUnit Decimal? @db.Decimal(8, 2)
@@ -616,7 +618,8 @@ model FulfillmentLeg {
   addressText String
   latitude    Decimal   @db.Decimal(9, 6)
   longitude   Decimal   @db.Decimal(9, 6)
-  scheduledDate DateTime @db.Date
+  // Nulo mientras el tramo no tiene franja (p. ej. entrega aún sin programar).
+  scheduledDate DateTime? @db.Date
   slotId      String?   @db.Uuid
   slot        TimeSlot? @relation(fields: [slotId], references: [id])
   driverId    String?   @db.Uuid
@@ -823,6 +826,8 @@ model Incident {
   status      IncidentStatus   @default(OPEN)
   description String
   resolution  String?
+  // Si la incidencia retuvo el pedido (estado INCIDENT), estado al que vuelve al resolverse.
+  previousStatus OrderStatus?
   evidenceRefs String[]
   createdById String?          @db.Uuid
   createdAt   DateTime         @default(now())

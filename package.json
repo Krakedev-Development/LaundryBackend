@@ -13,13 +13,15 @@
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "jest",
-    "test:e2e": "jest --config test/jest-e2e.json --runInBand",
+    "test": "pnpm test:build && node --test --test-concurrency=1 \"dist-test/test/unit/*.test.js\"",
+    "test:e2e": "node scripts/prepare-test-db.mjs && pnpm test:build && node --test --test-concurrency=1 \"dist-test/test/e2e/*.test.js\"",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
-    "db:bootstrap": "ts-node --transpile-only prisma/bootstrap.ts"
+    "db:bootstrap": "ts-node --transpile-only prisma/bootstrap.ts",
+    "test:build": "tsc -p tsconfig.test.json",
+    "test:all": "pnpm test && pnpm test:e2e"
   },
   "dependencies": {
     "@nestjs/common": "^12.3.3",
@@ -48,15 +50,12 @@
     "@nestjs/schematics": "^12.0.12",
     "@nestjs/testing": "^12.3.3",
     "@types/express": "^5.0.6",
-    "@types/jest": "^30.0.0",
     "@types/node": "^24.19.2",
     "@types/passport-jwt": "^4.0.1",
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
-    "jest": "^30.5.2",
     "prisma": "7.10.1",
     "supertest": "^7.3.1",
-    "ts-jest": "^29.4.15",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"
   }
