@@ -196,4 +196,43 @@ describe('catálogo y promociones', () => {
     await post(base).expect(201);
     await post(base).expect(409);
   });
+  it('permite consultar catálogo y geografía con tokens CLIENT y ADMIN', async () => {
+    await t.http
+      .post(`${api}/catalog/services`)
+      .set(bearer(admin))
+      .send({ name: 'Lavado y Planchado por Prenda', extraPrice: 2.5 })
+      .expect(201);
+    await t.http
+      .post(`${api}/catalog/extras`)
+      .set(bearer(admin))
+      .send({ name: 'Desmanchado Profundo', price: 1.5 })
+      .expect(201);
+    await t.http
+      .post(`${api}/catalog/memberships`)
+      .set(bearer(admin))
+      .send({
+        name: 'Estándar',
+        priceMonthly: 9.99,
+        weeklyPickups: 2,
+        garmentDiscountPercent: 10,
+        benefits: ['Tier 2', '10% descuento'],
+      })
+      .expect(201);
+
+    const endpoints = [
+      `${api}/catalog/garments`,
+      `${api}/catalog/services`,
+      `${api}/catalog/extras`,
+      `${api}/catalog/memberships`,
+      `${api}/zones`,
+      `${api}/facilities`,
+    ];
+
+    for (const token of [client, admin]) {
+      for (const endpoint of endpoints) {
+        const res = await t.http.get(endpoint).set(bearer(token)).expect(200);
+        assert.ok(Array.isArray(res.body));
+      }
+    }
+  });
 });
