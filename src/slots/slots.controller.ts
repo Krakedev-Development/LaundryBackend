@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import {
   CurrentUser,
+  Public,
   Roles,
   type AuthUser,
 } from '../common/decorators/auth.decorators';
@@ -20,9 +21,10 @@ import { SlotsService } from './slots.service';
 export class SlotsController {
   constructor(private readonly slots: SlotsService) {}
 
-  // Clientes y choferes ven solo agenda futura con cupo; el personal ve todo.
+  // Clientes, visitantes anónimos y choferes ven solo agenda futura con cupo; el personal ve todo.
+  @Public()
   @Get()
-  list(@CurrentUser() user: AuthUser, @Query() query: ListSlotsQuery) {
+  list(@Query() query: ListSlotsQuery, @CurrentUser() user?: AuthUser) {
     return this.slots.list(user, query);
   }
 
