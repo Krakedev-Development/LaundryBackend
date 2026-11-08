@@ -169,6 +169,32 @@ const PROMOTIONS: Array<{
   },
 ];
 
+const REWARDS: Array<{
+  title: string;
+  description: string;
+  category: string;
+  pointsCost: number;
+}> = [
+  {
+    title: 'Bolsa Ecológica de Lavandería',
+    description: 'Bolsa reutilizable de alta resistencia para tus entregas',
+    category: 'Productos',
+    pointsCost: 150,
+  },
+  {
+    title: 'Cupón de Entrega a Domicilio Gratis',
+    description: 'Cubre el valor de envío de tu siguiente pedido',
+    category: 'Descuentos',
+    pointsCost: 200,
+  },
+  {
+    title: '15% de Descuento en Pedido por Peso',
+    description: 'Aplica 15% de descuento en el total de tu orden',
+    category: 'Descuentos',
+    pointsCost: 350,
+  },
+];
+
 async function main() {
   const prisma = new PrismaClient({
     adapter: new PrismaPg({ connectionString: required('DATABASE_URL') }),
@@ -322,6 +348,29 @@ async function main() {
         });
         console.log(
           `[Promotion] Creada: ${promo.code} (${promo.discountValue.toFixed(0)}% - mín. $${promo.minOrderAmount.toFixed(2)})`,
+        );
+      }
+    }
+
+    // 6. Recompensas (Reward)
+    for (const reward of REWARDS) {
+      const existing = await prisma.reward.findFirst({
+        where: { title: reward.title },
+      });
+      if (existing) {
+        console.log(`[Reward] Ya existe: ${reward.title}`);
+      } else {
+        await prisma.reward.create({
+          data: {
+            title: reward.title,
+            description: reward.description,
+            category: reward.category,
+            pointsCost: reward.pointsCost,
+            active: true,
+          },
+        });
+        console.log(
+          `[Reward] Creada: ${reward.title} (${reward.pointsCost} pts - ${reward.category})`,
         );
       }
     }
