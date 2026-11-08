@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import {
   CurrentUser,
+  Public,
   Roles,
   type AuthUser,
 } from '../common/decorators/auth.decorators';
@@ -28,17 +29,18 @@ import {
   UpdateServiceTypeDto,
 } from './dto/catalog.dto';
 
-const isAdmin = (u: AuthUser) => u.role === 'ADMIN';
+const isAdmin = (u?: AuthUser) => u?.role === 'ADMIN';
 
-// Lectura: cualquier usuario autenticado (los inactivos solo los ve el administrador).
+// Lectura: pública (los inactivos solo los ve el administrador autenticado).
 // Escritura: solo administrador. No hay borrado: se desactiva para conservar el historial.
 @Controller('catalog')
 export class CatalogController {
   constructor(private readonly catalog: CatalogService) {}
 
   // ---- Prendas
+  @Public()
   @Get('garments')
-  garments(@CurrentUser() u: AuthUser) {
+  garments(@CurrentUser() u?: AuthUser) {
     return this.catalog.list('garmentType', isAdmin(u));
   }
   @Roles('ADMIN')
@@ -57,8 +59,9 @@ export class CatalogController {
   }
 
   // ---- Servicios
+  @Public()
   @Get('services')
-  services(@CurrentUser() u: AuthUser) {
+  services(@CurrentUser() u?: AuthUser) {
     return this.catalog.list('serviceType', isAdmin(u));
   }
   @Roles('ADMIN')
@@ -77,8 +80,9 @@ export class CatalogController {
   }
 
   // ---- Extras
+  @Public()
   @Get('extras')
-  extras(@CurrentUser() u: AuthUser) {
+  extras(@CurrentUser() u?: AuthUser) {
     return this.catalog.list('extra', isAdmin(u));
   }
   @Roles('ADMIN')
@@ -97,8 +101,9 @@ export class CatalogController {
   }
 
   // ---- Membresías
+  @Public()
   @Get('memberships')
-  memberships(@CurrentUser() u: AuthUser) {
+  memberships(@CurrentUser() u?: AuthUser) {
     return this.catalog.list('membershipPlan', isAdmin(u));
   }
   @Roles('ADMIN')
@@ -120,8 +125,9 @@ export class CatalogController {
   }
 
   // ---- Recompensas
+  @Public()
   @Get('rewards')
-  rewards(@CurrentUser() u: AuthUser) {
+  rewards(@CurrentUser() u?: AuthUser) {
     return this.catalog.list('reward', isAdmin(u));
   }
   @Roles('ADMIN')
@@ -139,8 +145,8 @@ export class CatalogController {
     return this.catalog.update(u, 'reward', id, { ...dto });
   }
 
-  // ---- Promociones (solo administrador; el cliente ingresa el código al crear el pedido)
-  @Roles('ADMIN')
+  // ---- Promociones
+  @Public()
   @Get('promotions')
   promotions() {
     return this.catalog.listPromotions();

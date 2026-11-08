@@ -19,8 +19,17 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
     const targets = [ctx.getHandler(), ctx.getClass()];
-    if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, targets))
+    if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, targets)) {
+      const req = ctx.switchToHttp().getRequest();
+      if (req.headers?.authorization?.startsWith('Bearer ')) {
+        try {
+          await super.canActivate(ctx);
+        } catch {
+          // En rutas públicas un token ausente o inválido opera como anónimo.
+        }
+      }
       return true;
+    }
     await super.canActivate(ctx);
     const user = ctx.switchToHttp().getRequest().user;
     const allowed = this.reflector.getAllAndOverride<boolean>(
