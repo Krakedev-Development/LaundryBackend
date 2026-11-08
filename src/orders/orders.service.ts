@@ -48,7 +48,13 @@ const ORDER_INCLUDE = {
   extras: true,
   legs: { include: { slot: true, driver: { select: { userId: true } } }, orderBy: { kind: 'asc' } },
   events: { orderBy: { createdAt: 'asc' } },
-  customer: { select: { userId: true } },
+  customer: {
+    select: {
+      id: true,
+      userId: true,
+      user: { select: { name: true, email: true, phone: true } },
+    },
+  },
 } satisfies Prisma.OrderInclude;
 export type FullOrder = Prisma.OrderGetPayload<{ include: typeof ORDER_INCLUDE }>;
 
@@ -118,6 +124,7 @@ export class OrdersService {
 
     const pickup = await this.ownedAddress(customer.id, dto.pickupAddressId);
     this.assertCoverage(facility.zone.polygon, pickup);
+
     const pickupSlot = await this.usableSlot(
       this.prisma,
       dto.pickupSlotId,
@@ -322,6 +329,12 @@ export class OrdersService {
         select: {
           id: true, number: true, status: true, mode: true, facilityId: true,
           paymentStatus: true, pricingStatus: true, total: true, version: true, createdAt: true,
+          customer: {
+            select: {
+              id: true,
+              user: { select: { name: true, email: true, phone: true } },
+            },
+          },
         },
       }),
     ]);
@@ -507,10 +520,7 @@ export class OrdersService {
       });
       for (const r of reservations) {
         await this.slots.releaseCapacity(tx, r.slotId);
-        await tx.slotReservation.update({
-          where: { id: r.id },
-          data: { active: false, releasedAt: new Date() },
-        });
+        await this.slotReservationRelease(tx, r.id);
       }
       await tx.fulfillmentLeg.updateMany({ where: { orderId: id }, data: { status: 'CANCELLED' } });
       if (lateFee)
@@ -532,6 +542,13 @@ export class OrdersService {
       if (!isClient)
         await this.notifications.orderStatus(tx, order, 'CANCELLED');
       return this.view(await this.loadOrder(id, tx));
+    });
+  }
+
+  private async slotReservationRelease(tx: Tx, id: string) {
+    await tx.slotReservation.update({
+      where: { id },
+      data: { active: false, releasedAt: new Date() },
     });
   }
 
@@ -822,7 +839,11 @@ export class OrdersService {
   }
 
   private view(order: FullOrder) {
-    const { customer: _customer, ...rest } = order;
-    return rest;
+    return {
+      ...order,
+      customerName: order.customer?.user?.name,
+      customerEmail: order.customer?.user?.email,
+      customerPhone: order.customer?.user?.phone,
+    };
   }
 }
