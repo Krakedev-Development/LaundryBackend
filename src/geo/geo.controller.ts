@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common';
 import {
   CurrentUser,
+  Public,
   Roles,
   type AuthUser,
 } from '../common/decorators/auth.decorators';
@@ -21,17 +22,18 @@ import {
 } from './dto/geo.dto';
 import { GeoService, publicFacility } from './geo.service';
 
-const isStaff = (u: AuthUser) => u.role === 'ADMIN' || u.role === 'SUPERVISOR';
+const isStaff = (u?: AuthUser) => u?.role === 'ADMIN' || u?.role === 'SUPERVISOR';
 
-// Lectura: cualquier usuario autenticado (los inactivos solo los ve el administrador).
+// Lectura: pública (los inactivos solo los ve el administrador autenticado).
 // Escritura: solo administrador. No hay borrado: se desactiva para conservar el historial.
 @Controller()
 export class GeoController {
   constructor(private readonly geo: GeoService) {}
 
+  @Public()
   @Get('zones')
-  zones(@CurrentUser() user: AuthUser) {
-    return this.geo.listZones(user.role === 'ADMIN');
+  zones(@CurrentUser() user?: AuthUser) {
+    return this.geo.listZones(user?.role === 'ADMIN');
   }
 
   @Roles('ADMIN')
@@ -50,20 +52,22 @@ export class GeoController {
     return this.geo.updateZone(actor, id, dto);
   }
 
+  @Public()
   @Get('facilities')
   async facilities(
-    @CurrentUser() user: AuthUser,
+    @CurrentUser() user?: AuthUser,
     @Query('zoneId') zoneId?: string,
   ) {
-    const rows = await this.geo.listFacilities(user.role === 'ADMIN', zoneId);
+    const rows = await this.geo.listFacilities(user?.role === 'ADMIN', zoneId);
     // Datos administrativos (NIT, encargado, capacidad) solo para el personal.
     return isStaff(user) ? rows : rows.map(publicFacility);
   }
 
+  @Public()
   @Get('facilities/:id')
   async facility(
-    @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user?: AuthUser,
   ) {
     const facility = await this.geo.getFacility(id);
     return isStaff(user) ? facility : publicFacility(facility);
