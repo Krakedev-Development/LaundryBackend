@@ -39,16 +39,20 @@ before(async () => {
 after(() => t.close());
 
 describe('autenticación y roles', () => {
-  it('rechaza rutas sin token', async () => {
-    await t.http.get(`${api}/zones`).expect(401);
+  it('rechaza rutas protegidas sin token', async () => {
+    await t.http.get(`${api}/orders`).expect(401);
   });
-  it('un cliente no puede escribir ni ver promociones', async () => {
+  it('un cliente no puede escribir en geografía ni promociones', async () => {
     await t.http
       .post(`${api}/zones`)
       .set(bearer(client))
       .send({ name: 'X', polygon: square })
       .expect(403);
-    await t.http.get(`${api}/catalog/promotions`).set(bearer(client)).expect(403);
+    await t.http
+      .post(`${api}/catalog/promotions`)
+      .set(bearer(client))
+      .send({ code: 'PROMO', discountType: 'PERCENTAGE', discountValue: 10 })
+      .expect(403);
   });
   it('registro, login incorrecto y refresh con detección de reuso', async () => {
     await t.http
@@ -196,7 +200,7 @@ describe('catálogo y promociones', () => {
     await post(base).expect(201);
     await post(base).expect(409);
   });
-  it('permite consultar catálogo y geografía con tokens CLIENT y ADMIN', async () => {
+  it('permite consultar catálogo y geografía sin token (público) y con tokens CLIENT y ADMIN', async () => {
     await t.http
       .post(`${api}/catalog/services`)
       .set(bearer(admin))
@@ -218,16 +222,35 @@ describe('catálogo y promociones', () => {
         benefits: ['Tier 2', '10% descuento'],
       })
       .expect(201);
+    await t.http
+      .post(`${api}/catalog/rewards`)
+      .set(bearer(admin))
+      .send({
+        title: 'Bolsa Ecológica de Lavandería',
+        description: 'Bolsa reutilizable de alta resistencia para tus entregas',
+        category: 'Productos',
+        pointsCost: 150,
+      })
+      .expect(201);
 
     const endpoints = [
       `${api}/catalog/garments`,
       `${api}/catalog/services`,
       `${api}/catalog/extras`,
       `${api}/catalog/memberships`,
+      `${api}/catalog/rewards`,
+      `${api}/catalog/promotions`,
       `${api}/zones`,
       `${api}/facilities`,
     ];
 
+    // Acceso anónimo (sin Authorization)
+    for (const endpoint of endpoints) {
+      const res = await t.http.get(endpoint).expect(200);
+      assert.ok(Array.isArray(res.body));
+    }
+
+    // Acceso autenticado (CLIENT y ADMIN)
     for (const token of [client, admin]) {
       for (const endpoint of endpoints) {
         const res = await t.http.get(endpoint).set(bearer(token)).expect(200);

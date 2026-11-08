@@ -16,10 +16,8 @@ const MATRIX: [string, string, Role[] | 'ANY'][] = [
   ['post', '/policy', ['ADMIN']],
   ['post', '/users/drivers', ['ADMIN']],
   ['post', '/users/staff', ['ADMIN']],
-  ['get', '/zones', 'ANY'],
   ['post', '/zones', ['ADMIN']],
   ['patch', `/zones/${ID}`, ['ADMIN']],
-  ['get', '/facilities', 'ANY'],
   ['post', '/facilities', ['ADMIN']],
   ['patch', `/facilities/${ID}`, ['ADMIN']],
   ['post', '/catalog/garments', ['ADMIN']],
@@ -27,7 +25,6 @@ const MATRIX: [string, string, Role[] | 'ANY'][] = [
   ['post', '/catalog/extras', ['ADMIN']],
   ['post', '/catalog/memberships', ['ADMIN']],
   ['post', '/catalog/rewards', ['ADMIN']],
-  ['get', '/catalog/promotions', ['ADMIN']],
   ['post', '/catalog/promotions', ['ADMIN']],
   ['patch', `/catalog/promotions/${ID}`, ['ADMIN']],
   ['post', '/slots', ['ADMIN', 'SUPERVISOR']],
@@ -118,7 +115,7 @@ describe('matriz de permisos por rol', () => {
     });
     const token = await login(t, pending.email);
     await t.http.get(`${api}/orders`).set(bearer(token)).expect(403);
-    await t.http.get(`${api}/zones`).set(bearer(token)).expect(403);
+    await t.http.get(`${api}/policy`).set(bearer(token)).expect(403);
     await t.http.get(`${api}/auth/me`).set(bearer(token)).expect(200);
   });
 
