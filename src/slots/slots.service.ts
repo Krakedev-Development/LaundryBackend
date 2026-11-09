@@ -18,7 +18,7 @@ import type {
 
 const toDate = (ymd: string) => new Date(`${ymd}T00:00:00.000Z`);
 export { nowIn };
-const isStaff = (u: AuthUser) => u.role === 'ADMIN' || u.role === 'SUPERVISOR';
+const isStaff = (u?: AuthUser) => u?.role === 'ADMIN' || u?.role === 'SUPERVISOR';
 
 @Injectable()
 export class SlotsService {
@@ -27,10 +27,11 @@ export class SlotsService {
     private readonly policy: PolicyService,
   ) {}
 
-  async list(user: AuthUser, q: ListSlotsQuery) {
+  async list(user: AuthUser | undefined, q: ListSlotsQuery) {
     const staff = isStaff(user);
-    const policy = await this.policy.requireActive();
-    const today = nowIn(policy.timezone).date;
+    const activePolicy = await this.policy.getActive();
+    const timezone = activePolicy?.timezone ?? 'America/Guayaquil';
+    const today = nowIn(timezone).date;
     // Quien no es personal solo ve agenda futura, activa y con cupo.
     const from = staff ? q.from : q.from && q.from > today ? q.from : today;
     const onlyAvailable = staff ? q.onlyAvailable === 'true' : true;

@@ -21,6 +21,7 @@
     "prisma:validate": "prisma validate",
     "db:bootstrap": "ts-node --transpile-only prisma/bootstrap.ts",
     "db:seed:catalog": "ts-node --transpile-only prisma/seed-catalog.ts",
+    "db:seed:slots": "ts-node --transpile-only prisma/seed-slots.ts",
     "test:build": "tsc -p tsconfig.test.json",
     "test:all": "pnpm test && pnpm test:e2e"
   },

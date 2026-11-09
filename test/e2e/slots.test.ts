@@ -62,7 +62,7 @@ describe('franjas', () => {
       .post(`${api}/policy`)
       .set(bearer(admin))
       .send({
-        timezone: 'America/Bogota',
+        timezone: 'America/Guayaquil',
         reason: 'Prueba',
         blockNewOrdersOnCharges: false,
         enforceDriverLimit: false,
@@ -101,13 +101,17 @@ describe('franjas', () => {
     await post(slot({ startTime: '14:00', endTime: '15:00' })).expect(201);
   });
 
-  it('el cliente no ve capacidad interna y solo franjas con cupo', async () => {
-    const res = await t.http
+  it('el cliente y el visitante anónimo no ven capacidad interna y solo franjas con cupo', async () => {
+    const resClient = await t.http
       .get(`${api}/slots?facilityId=${facilityId}&context=DRIVER_PICKUP`)
       .set(bearer(client))
       .expect(200);
-    assert.ok(res.body.length >= 1);
-    for (const s of res.body) {
+    const resAnon = await t.http
+      .get(`${api}/slots?facilityId=${facilityId}&context=DRIVER_PICKUP`)
+      .expect(200);
+    assert.ok(resClient.body.length >= 1);
+    assert.deepEqual(resAnon.body, resClient.body);
+    for (const s of resAnon.body) {
       assert.equal(s.capacity, undefined);
       assert.equal(s.reservedCount, undefined);
       assert.ok(s.available > 0);
