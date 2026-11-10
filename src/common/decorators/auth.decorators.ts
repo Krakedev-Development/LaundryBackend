@@ -27,3 +27,8 @@ export const CurrentUser = createParamDecorator(
   (_: unknown, ctx: ExecutionContext): AuthUser =>
     ctx.switchToHttp().getRequest().user,
 );
+
+// Un cliente solo puede operar (rutas que no son de lectura) con la identidad aprobada.
+// Estas rutas quedan exentas: autenticación, verificación y avisos.
+export const ALLOW_WITHOUT_KYC = 'allowWithoutKyc';
+export const AllowWithoutKyc = () => SetMetadata(ALLOW_WITHOUT_KYC, true);

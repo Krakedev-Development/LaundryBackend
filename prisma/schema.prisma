@@ -34,6 +34,14 @@ enum KycStatus {
   REJECTED
 }
 
+// Imagenes de la verificacion de identidad. Se guardan en la base de datos mientras no haya
+// proveedor de almacenamiento; el acceso es solo por endpoints autenticados.
+enum KycDocumentType {
+  SELFIE
+  ID_FRONT
+  ID_BACK
+}
+
 enum FulfillmentMode {
   HOME_HOME
   HOME_STORE
@@ -247,9 +255,8 @@ model Customer {
   kycRejectionReason String?
   kycDocumentType    String?
   kycDocumentNumber  String?
-  // Referencias opacas a almacenamiento; el proveedor aun no esta definido.
-  kycDocumentRef     String?
-  kycSelfieRef       String?
+  // Numero de envios de verificacion ya realizados (el primero y sus reenvios).
+  kycSubmissions     Int       @default(0)
   kycReviewedById    String?   @db.Uuid
   kycReviewedAt      DateTime?
   membershipPlanId   String?   @db.Uuid
@@ -262,6 +269,7 @@ model Customer {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
+  kycDocuments   KycDocument[]
   addresses      Address[]
   orders         Order[]
   ledger         LedgerEntry[]
@@ -392,8 +400,8 @@ model BusinessPolicy {
   driverLimit        Int?
   driverMayReorder   Boolean  @default(false)
   requireStorePickupSlot Boolean @default(false)
-  // Si es verdadero, solo clientes con identidad aprobada (KYC) pueden crear pedidos.
-  requireKycForOrders Boolean @default(false)
+  // Reenvios de la verificacion permitidos tras un rechazo (ademas del primer envio).
+  kycMaxResubmissions Int @default(3)
   handoffMaxAttempts Int?
   handoffTtlMinutes  Int?
   pointsPerCurrencyUnit Decimal? @db.Decimal(8, 2)
@@ -405,6 +413,22 @@ model BusinessPolicy {
   createdAt   DateTime @default(now())
 
   @@index([active])
+}
+
+model KycDocument {
+  id          String          @id @default(uuid()) @db.Uuid
+  customerId  String          @db.Uuid
+  customer    Customer        @relation(fields: [customerId], references: [id])
+  // Numero de envio al que pertenece (kycSubmissions + 1 mientras es borrador).
+  submission  Int
+  type        KycDocumentType
+  mimeType    String
+  sizeBytes   Int
+  sha256      String
+  data        Bytes
+  createdAt   DateTime        @default(now())
+
+  @@unique([customerId, submission, type])
 }
 
 model GarmentType {

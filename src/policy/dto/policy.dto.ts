@@ -41,7 +41,8 @@ export class CreatePolicyDto {
   @IsOptional() @IsInt() @Min(1) driverLimit?: number;
   @IsBoolean() driverMayReorder: boolean;
   @IsBoolean() requireStorePickupSlot: boolean;
-  @IsOptional() @IsBoolean() requireKycForOrders?: boolean;
+  // Reenvíos de la verificación de identidad tras un rechazo; sin valor, se usan 3.
+  @IsOptional() @IsInt() @Min(0) @Max(10) kycMaxResubmissions?: number;
   @IsOptional() @IsInt() @Min(1) handoffMaxAttempts?: number;
   @IsOptional() @IsInt() @Min(1) handoffTtlMinutes?: number;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) pointsPerCurrencyUnit?: number;

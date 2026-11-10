@@ -38,6 +38,7 @@ export interface World {
   serviceId: string;
   slot(context: string, capacity?: number): Promise<string>;
   newClient(email: string): Promise<Client>;
+  newPendingClient(email: string): Promise<{ token: string; customerId: string }>;
   order(c: Client, over?: Record<string, unknown>): Promise<string>;
   version(orderId: string): Promise<number>;
   credit(customerId: string, amount: number): Promise<void>;
@@ -91,23 +92,33 @@ export async function buildWorld(t: TestApp): Promise<World> {
     return res.body.id as string;
   };
 
-  const newClient = async (email: string): Promise<Client> => {
+  // Cliente recién registrado: su identidad aún no está aprobada.
+  const newPendingClient = async (email: string) => {
     const reg = await t.http
       .post(`${api}/auth/register`)
-      .send({ name: email, email, phone: '+5712345678', password: 'Cliente2026ok' })
+      .send({ firstName: 'Cliente', lastName: 'Prueba', email, phone: '+5712345678', password: 'Cliente2026ok' })
       .expect(201);
-    const token = reg.body.tokens.accessToken as string;
+    const customer = await t.prisma.customer.findFirstOrThrow({ where: { userId: reg.body.user.id } });
+    return { token: reg.body.tokens.accessToken as string, customerId: customer.id };
+  };
+
+  // Cliente con identidad aprobada, listo para operar.
+  const newClient = async (email: string): Promise<Client> => {
+    const { token, customerId } = await newPendingClient(email);
+    await t.prisma.customer.update({
+      where: { id: customerId },
+      data: { kycStatus: 'APPROVED', kycSubmissions: 1 },
+    });
     const addr = await t.http
       .post(`${api}/customers/me/addresses`)
       .set(bearer(token))
       .send({ title: 'Casa', fullAddress: 'Calle 1 #2-3', latitude: 5, longitude: 5 })
       .expect(201);
-    const customer = await t.prisma.customer.findFirstOrThrow({ where: { userId: reg.body.user.id } });
-    return { token, addressId: addr.body.id, customerId: customer.id };
+    return { token, addressId: addr.body.id, customerId };
   };
 
   const world: World = {
-    t, admin, facilityId, garmentId, serviceId, driverId, slot, newClient,
+    t, admin, facilityId, garmentId, serviceId, driverId, slot, newClient, newPendingClient,
     supervisor: await login(t, 'sup@test.local'),
     driverToken: await login(t, 'driver@test.local'),
     async order(c, over = {}) {

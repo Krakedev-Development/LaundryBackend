@@ -12,7 +12,8 @@ export const PASSWORD_MESSAGE =
   'La contraseña debe tener entre 10 y 72 caracteres, con letras y números.';
 
 export class RegisterDto {
-  @IsString() @IsNotEmpty() @MaxLength(120) name: string;
+  @IsString() @IsNotEmpty() @MaxLength(60) firstName: string;
+  @IsString() @IsNotEmpty() @MaxLength(60) lastName: string;
   @IsEmail() email: string;
   @IsString()
   @Matches(/^\+?[0-9\s-]{8,20}$/, { message: 'Teléfono inválido.' })

@@ -4,6 +4,7 @@ import {
   CurrentUser,
   Public,
   type AuthUser,
+  AllowWithoutKyc,
 } from '../common/decorators/auth.decorators';
 import { AuthService } from './auth.service';
 import {
@@ -13,6 +14,7 @@ import {
   RegisterDto,
 } from './dto/auth.dto';
 
+@AllowWithoutKyc()
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}

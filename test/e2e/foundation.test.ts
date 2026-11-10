@@ -58,7 +58,8 @@ describe('autenticación y roles', () => {
     await t.http
       .post(`${api}/auth/register`)
       .send({
-        name: 'Nueva',
+        firstName: 'Nueva',
+        lastName: 'Cliente',
         email: 'nueva@test.local',
         phone: '+5712345678',
         password: 'Cliente2026ok',

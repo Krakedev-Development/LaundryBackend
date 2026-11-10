@@ -7,7 +7,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
-import type { User } from '../generated/prisma/client';
+import type { KycStatus, User } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type { ChangePasswordDto, LoginDto, RegisterDto } from './dto/auth.dto';
 
@@ -24,9 +24,14 @@ export interface PublicUser {
   role: User['role'];
   status: User['status'];
   facilityId: string | null;
+  // Estado de verificación de identidad; solo aplica a clientes.
+  kycStatus: KycStatus | null;
 }
 
-export function toPublic(user: User): PublicUser {
+export function toPublic(
+  user: User,
+  kycStatus: KycStatus | null = null,
+): PublicUser {
   return {
     id: user.id,
     email: user.email,
@@ -34,6 +39,7 @@ export function toPublic(user: User): PublicUser {
     role: user.role,
     status: user.status,
     facilityId: user.facilityId,
+    kycStatus,
   };
 }
 
@@ -54,28 +60,33 @@ export class AuthService {
     const email = dto.email.trim().toLowerCase();
     if (await this.prisma.user.findUnique({ where: { email } }))
       throw new ConflictException('El correo ya tiene una cuenta.');
+    const name = `${dto.firstName.trim()} ${dto.lastName.trim()}`;
     const user = await this.prisma.user.create({
       data: {
         email,
-        name: dto.name.trim(),
+        name,
         phone: dto.phone.trim(),
         role: 'CLIENT',
         passwordHash: await argon2.hash(dto.password),
         customer: {
           create: {
-            billingName: dto.name.trim(),
+            billingName: name,
             billingEmail: email,
             billingPhone: dto.phone.trim(),
           },
         },
       },
     });
-    return { user: toPublic(user), tokens: await this.issueTokens(user) };
+    return {
+      user: toPublic(user, 'NOT_SUBMITTED'),
+      tokens: await this.issueTokens(user),
+    };
   }
 
   async login(dto: LoginDto): Promise<{ user: PublicUser; tokens: TokenPair }> {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.trim().toLowerCase() },
+      include: { customer: { select: { kycStatus: true } } },
     });
     // Correo inexistente y clave errónea responden igual y cuestan lo mismo.
     let ok = false;
@@ -83,7 +94,10 @@ export class AuthService {
     else await argon2.hash(dto.password);
     if (!user || !ok || user.status === 'SUSPENDED')
       throw new UnauthorizedException('Correo o contraseña incorrectos.');
-    return { user: toPublic(user), tokens: await this.issueTokens(user) };
+    return {
+      user: toPublic(user, user.customer?.kycStatus ?? null),
+      tokens: await this.issueTokens(user),
+    };
   }
 
   // Rotación: cada refresh invalida el token usado. Reusar uno ya revocado indica
@@ -137,9 +151,11 @@ export class AuthService {
   }
 
   async me(userId: string): Promise<PublicUser> {
-    return toPublic(
-      await this.prisma.user.findUniqueOrThrow({ where: { id: userId } }),
-    );
+    const user = await this.prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      include: { customer: { select: { kycStatus: true } } },
+    });
+    return toPublic(user, user.customer?.kycStatus ?? null);
   }
 
   private revokeAll(userId: string) {
