@@ -52,3 +52,15 @@ export class CustomersController {
     return this.customers.deleteAddress(user, id);
   }
 }
+
+// Directorio para el administrador: clientes registrados, con o sin verificación aprobada.
+@Roles('ADMIN')
+@Controller('customers')
+export class CustomersDirectoryController {
+  constructor(private readonly customers: CustomersService) {}
+
+  @Get()
+  directory() {
+    return this.customers.directory();
+  }
+}

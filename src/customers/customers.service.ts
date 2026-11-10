@@ -24,6 +24,36 @@ export class CustomersService {
     };
   }
 
+  // Directorio del administrador: todos los clientes, con o sin verificación aprobada.
+  async directory() {
+    const customers = await this.prisma.customer.findMany({
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { name: true, email: true, phone: true } },
+        addresses: {
+          where: { deletedAt: null },
+          orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+          select: { title: true, fullAddress: true, reference: true },
+        },
+        _count: { select: { orders: true } },
+      },
+    });
+    return customers.map((c) => ({
+      id: c.id,
+      name: c.user.name,
+      email: c.user.email,
+      phone: c.user.phone,
+      kycStatus: c.kycStatus,
+      kycDocumentType: c.kycDocumentType,
+      kycDocumentNumber: c.kycDocumentNumber,
+      kycRejectionReason: c.kycRejectionReason,
+      kycReviewedAt: c.kycReviewedAt,
+      addresses: c.addresses,
+      totalOrders: c._count.orders,
+      createdAt: c.createdAt,
+    }));
+  }
+
   async listAddresses(user: AuthUser) {
     const customer = await this.customerOf(user);
     return this.prisma.address.findMany({

@@ -261,3 +261,27 @@ describe('límite de reenvíos', () => {
     await post(w.admin, '/policy', { ...FULL_POLICY }).expect(201);
   });
 });
+
+describe('directorio de clientes', () => {
+  it('lista a los clientes registrados, pendientes o aprobados, solo para el administrador', async () => {
+    const pending = await submitted('directorio-pendiente@test.local');
+    const approved = await w.newClient('directorio-aprobado@test.local');
+
+    const rows = (await get(w.admin, '/customers').expect(200)).body;
+    const byId = new Map<string, { kycStatus: string; email: string }>(
+      rows.map((r: { id: string; kycStatus: string; email: string }) => [r.id, r]),
+    );
+    assert.equal(byId.get(pending.customerId)?.kycStatus, 'PENDING');
+    assert.equal(byId.get(approved.customerId)?.kycStatus, 'APPROVED');
+
+    await post(w.admin, `/kyc/${pending.customerId}/review`, { approve: true }).expect(201);
+    const after = (await get(w.admin, '/customers').expect(200)).body;
+    assert.equal(
+      after.find((r: { id: string }) => r.id === pending.customerId).kycStatus,
+      'APPROVED',
+    );
+
+    await get(pending.token, '/customers').expect(403);
+    await get(w.supervisor, '/customers').expect(403);
+  });
+});
