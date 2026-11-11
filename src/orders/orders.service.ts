@@ -39,6 +39,7 @@ import {
   type Gate,
 } from './order-state-machine';
 import { computePricing } from './pricing';
+import { trackingLegFor } from './tracking';
 
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
@@ -831,6 +832,63 @@ export class OrdersService {
     const order = await db.order.findUnique({ where: { id }, include: ORDER_INCLUDE });
     if (!order) throw new NotFoundException('El pedido no existe.');
     return order;
+  }
+
+  // ------------------------------------------------------------------ Seguimiento en vivo
+
+  // Vista táctica del pedido: tramo activo, dirección del cliente, sede y chofer con su
+  // última ubicación. Aplica la misma visibilidad que el detalle del pedido.
+  async tracking(user: AuthUser, id: string) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+    const activeLeg = trackingLegFor(order.status);
+    const leg = activeLeg ? order.legs.find((l) => l.kind === activeLeg) : undefined;
+    // Sin tramo activo se muestra la dirección de recogida del cliente.
+    const addressLeg = leg ?? order.legs.find((l) => l.kind === 'INBOUND')!;
+
+    const facility = await this.prisma.facility.findUniqueOrThrow({
+      where: { id: order.facilityId },
+      select: { id: true, name: true, address: true, latitude: true, longitude: true },
+    });
+    const driver = leg?.driverId
+      ? await this.prisma.driver.findUnique({
+          where: { id: leg.driverId },
+          include: { user: { select: { name: true, phone: true } } },
+        })
+      : null;
+
+    return {
+      orderId: order.id,
+      orderNumber: order.number,
+      status: order.status,
+      mode: order.mode,
+      activeLeg,
+      customerAddress: {
+        text: addressLeg.addressText,
+        latitude: Number(addressLeg.latitude),
+        longitude: Number(addressLeg.longitude),
+      },
+      facility: {
+        id: facility.id,
+        name: facility.name,
+        address: facility.address,
+        latitude: Number(facility.latitude),
+        longitude: Number(facility.longitude),
+      },
+      assignedDriver: driver
+        ? {
+            driverId: driver.id,
+            name: driver.user.name,
+            phone: driver.user.phone,
+            plate: driver.plate,
+            vehicle: driver.vehicle,
+            status: driver.status,
+            latitude: driver.latitude === null ? null : Number(driver.latitude),
+            longitude: driver.longitude === null ? null : Number(driver.longitude),
+            locationAt: driver.locationAt ? driver.locationAt.toISOString() : null,
+          }
+        : null,
+    };
   }
 
   private view(order: FullOrder) {

@@ -56,6 +56,12 @@ export class OrdersController {
     return this.orders.get(user, id);
   }
 
+  @Roles('CLIENT', 'ADMIN', 'SUPERVISOR', 'DRIVER')
+  @Get(':id/tracking')
+  tracking(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.orders.tracking(user, id);
+  }
+
   @Post(':id/transitions')
   transition(
     @CurrentUser() user: AuthUser,
