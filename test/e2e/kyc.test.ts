@@ -262,26 +262,58 @@ describe('límite de reenvíos', () => {
   });
 });
 
-describe('directorio de clientes', () => {
-  it('lista a los clientes registrados, pendientes o aprobados, solo para el administrador', async () => {
+describe('directorio de clientes y membresía', () => {
+  it('lista solo clientes aprobados, y solo al administrador', async () => {
     const pending = await submitted('directorio-pendiente@test.local');
     const approved = await w.newClient('directorio-aprobado@test.local');
 
     const rows = (await get(w.admin, '/customers').expect(200)).body;
-    const byId = new Map<string, { kycStatus: string; email: string }>(
-      rows.map((r: { id: string; kycStatus: string; email: string }) => [r.id, r]),
-    );
-    assert.equal(byId.get(pending.customerId)?.kycStatus, 'PENDING');
-    assert.equal(byId.get(approved.customerId)?.kycStatus, 'APPROVED');
+    const ids = rows.map((r: { id: string }) => r.id);
+    assert.ok(ids.includes(approved.customerId));
+    assert.ok(!ids.includes(pending.customerId), 'un pendiente no aparece en el directorio');
+    assert.ok(rows.every((r: { kycStatus: string }) => r.kycStatus === 'APPROVED'));
 
     await post(w.admin, `/kyc/${pending.customerId}/review`, { approve: true }).expect(201);
     const after = (await get(w.admin, '/customers').expect(200)).body;
-    assert.equal(
-      after.find((r: { id: string }) => r.id === pending.customerId).kycStatus,
-      'APPROVED',
-    );
+    assert.ok(after.some((r: { id: string }) => r.id === pending.customerId));
 
     await get(pending.token, '/customers').expect(403);
     await get(w.supervisor, '/customers').expect(403);
+  });
+
+  it('sin plan elegido no hay membresía; el cliente la elige y se refleja en todas partes', async () => {
+    const plan = (
+      await post(w.admin, '/catalog/memberships', {
+        name: 'Plan de prueba',
+        priceMonthly: 12.5,
+        weeklyPickups: 2,
+        garmentDiscountPercent: 8,
+        benefits: ['8% de descuento'],
+      }).expect(201)
+    ).body;
+    const c = await w.newClient('con-plan@test.local');
+
+    const me = (await get(c.token, '/auth/me').expect(200)).body;
+    assert.equal(me.membershipPlan, null);
+    const listed = (await get(w.admin, '/customers').expect(200)).body.find(
+      (r: { id: string }) => r.id === c.customerId,
+    );
+    assert.equal(listed.membershipPlan, null);
+
+    await t.http.put(`${api}/customers/me/membership`).set(bearer(c.token))
+      .send({ planId: '00000000-0000-4000-8000-000000000000' }).expect(404);
+    await t.http.put(`${api}/customers/me/membership`).set(bearer(c.token))
+      .send({ planId: plan.id }).expect(200);
+
+    assert.equal((await get(c.token, '/auth/me').expect(200)).body.membershipPlan.name, 'Plan de prueba');
+    const after = (await get(w.admin, '/customers').expect(200)).body.find(
+      (r: { id: string }) => r.id === c.customerId,
+    );
+    assert.equal(after.membershipPlan.name, 'Plan de prueba');
+
+    // Un cliente sin verificación aprobada no puede elegir plan.
+    const pending = await w.newPendingClient('pendiente-plan@test.local');
+    await t.http.put(`${api}/customers/me/membership`).set(bearer(pending.token))
+      .send({ planId: plan.id }).expect(403);
   });
 });

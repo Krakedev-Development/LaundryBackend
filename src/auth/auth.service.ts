@@ -26,11 +26,20 @@ export interface PublicUser {
   facilityId: string | null;
   // Estado de verificación de identidad; solo aplica a clientes.
   kycStatus: KycStatus | null;
+  // Plan de membresía elegido por el cliente; null mientras no haya elegido ninguno.
+  membershipPlan: { id: string; name: string } | null;
 }
+
+// Datos del cliente que viajan con el usuario público.
+const CUSTOMER_PUBLIC = {
+  kycStatus: true,
+  membershipPlan: { select: { id: true, name: true } },
+} as const;
 
 export function toPublic(
   user: User,
   kycStatus: KycStatus | null = null,
+  membershipPlan: { id: string; name: string } | null = null,
 ): PublicUser {
   return {
     id: user.id,
@@ -40,6 +49,7 @@ export function toPublic(
     status: user.status,
     facilityId: user.facilityId,
     kycStatus,
+    membershipPlan,
   };
 }
 
@@ -78,7 +88,7 @@ export class AuthService {
       },
     });
     return {
-      user: toPublic(user, 'NOT_SUBMITTED'),
+      user: toPublic(user, 'NOT_SUBMITTED', null),
       tokens: await this.issueTokens(user),
     };
   }
@@ -86,7 +96,7 @@ export class AuthService {
   async login(dto: LoginDto): Promise<{ user: PublicUser; tokens: TokenPair }> {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email.trim().toLowerCase() },
-      include: { customer: { select: { kycStatus: true } } },
+      include: { customer: { select: CUSTOMER_PUBLIC } },
     });
     // Correo inexistente y clave errónea responden igual y cuestan lo mismo.
     let ok = false;
@@ -95,7 +105,11 @@ export class AuthService {
     if (!user || !ok || user.status === 'SUSPENDED')
       throw new UnauthorizedException('Correo o contraseña incorrectos.');
     return {
-      user: toPublic(user, user.customer?.kycStatus ?? null),
+      user: toPublic(
+        user,
+        user.customer?.kycStatus ?? null,
+        user.customer?.membershipPlan ?? null,
+      ),
       tokens: await this.issueTokens(user),
     };
   }
@@ -153,9 +167,13 @@ export class AuthService {
   async me(userId: string): Promise<PublicUser> {
     const user = await this.prisma.user.findUniqueOrThrow({
       where: { id: userId },
-      include: { customer: { select: { kycStatus: true } } },
+      include: { customer: { select: CUSTOMER_PUBLIC } },
     });
-    return toPublic(user, user.customer?.kycStatus ?? null);
+    return toPublic(
+      user,
+      user.customer?.kycStatus ?? null,
+      user.customer?.membershipPlan ?? null,
+    );
   }
 
   private revokeAll(userId: string) {

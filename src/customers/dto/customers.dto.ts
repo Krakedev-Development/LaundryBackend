@@ -1,6 +1,7 @@
 import { PartialType } from '@nestjs/swagger';
 import {
   IsBoolean,
+  IsUUID,
   IsLatitude,
   IsLongitude,
   IsNotEmpty,
@@ -16,6 +17,10 @@ export class CreateAddressDto {
   @IsLatitude() latitude: number;
   @IsLongitude() longitude: number;
   @IsOptional() @IsBoolean() isPrimary?: boolean;
+}
+
+export class SetMembershipDto {
+  @IsUUID() planId: string;
 }
 
 export class UpdateAddressDto extends PartialType(CreateAddressDto) {}
