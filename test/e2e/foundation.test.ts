@@ -157,6 +157,21 @@ describe('zonas y sedes', () => {
       .send({ active: false })
       .expect(409);
   });
+  it('rechaza capacidad nula y zonas sin identificador real con mensajes claros', async () => {
+    const base = { name: 'S', address: 'A', latitude: 5, longitude: 5 };
+    const noCapacity = await t.http
+      .post(`${api}/facilities`)
+      .set(bearer(admin))
+      .send({ ...base, zoneId, dailyCapacity: 0 })
+      .expect(400);
+    assert.match(noCapacity.text, /La capacidad diaria debe ser de al menos 1 kg/);
+    const localZone = await t.http
+      .post(`${api}/facilities`)
+      .set(bearer(admin))
+      .send({ ...base, zoneId: 'ZONA-123', dailyCapacity: 10 })
+      .expect(400);
+    assert.match(localZone.text, /Selecciona una zona válida/);
+  });
   it('los cambios quedan auditados', async () => {
     assert.ok((await t.prisma.auditLog.count({ where: { entity: 'Zone' } })) >= 1);
     assert.ok((await t.prisma.auditLog.count({ where: { entity: 'Facility' } })) >= 1);

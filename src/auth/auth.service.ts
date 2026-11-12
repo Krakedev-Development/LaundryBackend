@@ -104,6 +104,17 @@ export class AuthService {
     else await argon2.hash(dto.password);
     if (!user || !ok || user.status === 'SUSPENDED')
       throw new UnauthorizedException('Correo o contraseña incorrectos.');
+    // Los ingresos del personal y los choferes quedan registrados para su seguimiento.
+    if (user.role !== 'CLIENT')
+      await this.prisma.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: user.role,
+          action: 'LOGIN',
+          entity: 'User',
+          entityId: user.id,
+        },
+      });
     return {
       user: toPublic(
         user,

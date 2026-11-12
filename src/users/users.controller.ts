@@ -1,13 +1,18 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
 import {
   CurrentUser,
   Roles,
   type AuthUser,
 } from '../common/decorators/auth.decorators';
-import { CreateDriverDto, CreateStaffDto } from './dto/users.dto';
+import {
+  CreateDriverDto,
+  CreateStaffDto,
+  ResetPasswordDto,
+  SetUserStatusDto,
+} from './dto/users.dto';
 import { UsersService } from './users.service';
 
-// Las cuentas de chofer y personal las provisiona exclusivamente el administrador.
+// Las cuentas de chofer y personal las provisiona y gestiona exclusivamente el administrador.
 @Roles('ADMIN')
 @Controller('users')
 export class UsersController {
@@ -18,8 +23,31 @@ export class UsersController {
     return this.users.createDriver(actor, dto);
   }
 
+  @Get('staff')
+  listStaff() {
+    return this.users.listStaff();
+  }
+
   @Post('staff')
   createStaff(@CurrentUser() actor: AuthUser, @Body() dto: CreateStaffDto) {
     return this.users.createStaff(actor, dto);
+  }
+
+  @Patch(':id/status')
+  setStatus(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SetUserStatusDto,
+  ) {
+    return this.users.setStatus(actor, id, dto);
+  }
+
+  @Post(':id/reset-password')
+  resetPassword(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ResetPasswordDto,
+  ) {
+    return this.users.resetPassword(actor, id, dto);
   }
 }

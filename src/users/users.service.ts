@@ -94,6 +94,118 @@ export class UsersService {
     });
   }
 
+  // Personal de la web (supervisores y administradores) con su sede y último ingreso.
+  async listStaff() {
+    const users = await this.prisma.user.findMany({
+      where: { role: { in: ['SUPERVISOR', 'ADMIN'] } },
+      orderBy: [{ role: 'desc' }, { createdAt: 'desc' }],
+      include: { facility: { select: { id: true, name: true } } },
+    });
+    const logins = await this.prisma.auditLog.groupBy({
+      by: ['actorId'],
+      where: { action: 'LOGIN', actorId: { in: users.map((u) => u.id) } },
+      _max: { createdAt: true },
+    });
+    const lastLogin = new Map(logins.map((l) => [l.actorId, l._max.createdAt]));
+    return users.map((u) => ({
+      id: u.id,
+      name: u.name,
+      email: u.email,
+      phone: u.phone,
+      role: u.role,
+      status: u.status,
+      facility: u.facility,
+      createdAt: u.createdAt,
+      lastLoginAt: lastLogin.get(u.id) ?? null,
+    }));
+  }
+
+  // Suspender cierra todas sus sesiones; reactivar devuelve el acceso.
+  async setStatus(
+    actor: AuthUser,
+    id: string,
+    dto: { status: 'ACTIVE' | 'SUSPENDED'; reason?: string },
+  ) {
+    const user = await this.manageable(actor, id);
+    if (dto.status === 'SUSPENDED' && user.status === 'SUSPENDED')
+      throw new ConflictException('La cuenta ya está suspendida.');
+    if (dto.status === 'ACTIVE' && user.status !== 'SUSPENDED')
+      throw new ConflictException('La cuenta no está suspendida.');
+    // Al reactivar se restaura el estado previo: quien no había cambiado su contraseña
+    // temporal sigue obligado a hacerlo.
+    let next: 'ACTIVE' | 'SUSPENDED' | 'PASSWORD_CHANGE_REQUIRED' = dto.status;
+    if (dto.status === 'ACTIVE') {
+      const suspension = await this.prisma.auditLog.findFirst({
+        where: { entity: 'User', entityId: id, action: 'USER_SUSPENDED' },
+        orderBy: { createdAt: 'desc' },
+      });
+      const previous = (suspension?.before as { status?: string } | null)?.status;
+      if (previous === 'PASSWORD_CHANGE_REQUIRED') next = previous;
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id },
+        data: { status: next },
+      });
+      if (dto.status === 'SUSPENDED')
+        await tx.refreshToken.updateMany({
+          where: { userId: id, revokedAt: null },
+          data: { revokedAt: new Date() },
+        });
+      await tx.auditLog.create({
+        data: {
+          actorId: actor.id,
+          actorRole: actor.role,
+          action: dto.status === 'SUSPENDED' ? 'USER_SUSPENDED' : 'USER_REACTIVATED',
+          entity: 'User',
+          entityId: id,
+          reason: dto.reason?.trim() || null,
+          before: { status: user.status },
+          after: { status: next },
+        },
+      });
+      return toPublic(updated);
+    });
+  }
+
+  // Nueva contraseña temporal: la cuenta debe cambiarla en el siguiente ingreso.
+  async resetPassword(actor: AuthUser, id: string, dto: { temporaryPassword: string }) {
+    const user = await this.manageable(actor, id);
+    if (user.status === 'SUSPENDED')
+      throw new ConflictException('Reactiva la cuenta antes de restablecer su contraseña.');
+    const passwordHash = await argon2.hash(dto.temporaryPassword);
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id },
+        data: { passwordHash, status: 'PASSWORD_CHANGE_REQUIRED' },
+      });
+      await tx.refreshToken.updateMany({
+        where: { userId: id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: actor.id,
+          actorRole: actor.role,
+          action: 'PASSWORD_RESET',
+          entity: 'User',
+          entityId: id,
+        },
+      });
+      return toPublic(updated);
+    });
+  }
+
+  // Solo cuentas de personal y choferes, y nunca la propia.
+  private async manageable(actor: AuthUser, id: string) {
+    if (actor.id === id)
+      throw new BadRequestException('No puedes modificar tu propia cuenta.');
+    const user = await this.prisma.user.findUnique({ where: { id } });
+    if (!user || user.role === 'CLIENT')
+      throw new NotFoundException('La cuenta no existe.');
+    return user;
+  }
+
   private async assertEmailFree(email: string): Promise<void> {
     if (await this.prisma.user.findUnique({ where: { email } }))
       throw new ConflictException('El correo ya tiene una cuenta.');
