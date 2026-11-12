@@ -66,9 +66,13 @@ async function slot(context: string, capacity = 5): Promise<string> {
 async function newClient(email: string) {
   const reg = await t.http
     .post(`${api}/auth/register`)
-    .send({ name: email, email, phone: '+5712345678', password: 'Cliente2026ok' })
+    .send({ firstName: 'Cliente', lastName: 'Prueba', email, phone: '+5712345678', password: 'Cliente2026ok' })
     .expect(201);
   const token = reg.body.tokens.accessToken as string;
+  await t.prisma.customer.updateMany({
+    where: { userId: reg.body.user.id },
+    data: { kycStatus: 'APPROVED', kycSubmissions: 1 },
+  });
   const addr = await t.http
     .post(`${api}/customers/me/addresses`)
     .set(as(token))

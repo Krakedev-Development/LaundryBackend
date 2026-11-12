@@ -32,7 +32,6 @@ export class PolicyController {
       noShowFee: policy.noShowFee,
       failedPickupFee: policy.failedPickupFee,
       requireStorePickupSlot: policy.requireStorePickupSlot,
-      requireKycForOrders: policy.requireKycForOrders,
       pointsPerCurrencyUnit: policy.pointsPerCurrencyUnit,
       walletTopUpMin: policy.walletTopUpMin,
       walletTopUpMax: policy.walletTopUpMax,

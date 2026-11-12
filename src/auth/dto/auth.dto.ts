@@ -7,12 +7,13 @@ import {
   MinLength,
 } from 'class-validator';
 
-export const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d).{10,72}$/;
+export const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d).{8,72}$/;
 export const PASSWORD_MESSAGE =
-  'La contraseña debe tener entre 10 y 72 caracteres, con letras y números.';
+  'La contraseña debe tener entre 8 y 72 caracteres, con letras y números.';
 
 export class RegisterDto {
-  @IsString() @IsNotEmpty() @MaxLength(120) name: string;
+  @IsString() @IsNotEmpty() @MaxLength(50) firstName: string;
+  @IsString() @IsNotEmpty() @MaxLength(50) lastName: string;
   @IsEmail() email: string;
   @IsString()
   @Matches(/^\+?[0-9\s-]{8,20}$/, { message: 'Teléfono inválido.' })

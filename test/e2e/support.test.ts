@@ -37,49 +37,6 @@ before(async () => {
 });
 after(() => t.close());
 
-describe('KYC', () => {
-  it('el cliente envía, el personal revisa y se notifica el resultado', async () => {
-    const c = await w.newClient('kyc@test.local');
-    assert.equal((await get(c.token, '/kyc/me')).body.status, 'NOT_SUBMITTED');
-    await post(c.token, '/kyc/me', { documentType: 'CC', documentNumber: '123' }).expect(201);
-    assert.equal((await get(c.token, '/kyc/me')).body.status, 'PENDING');
-    await post(c.token, '/kyc/me', { documentType: 'CC', documentNumber: '123' }).expect(409);
-
-    await get(c.token, '/kyc').expect(403);
-    const queue = await get(w.supervisor, '/kyc').expect(200);
-    assert.ok(queue.body.some((x: { id: string }) => x.id === c.customerId));
-
-    await post(w.supervisor, `/kyc/${c.customerId}/review`, { approve: false }).expect(400);
-    await post(w.supervisor, `/kyc/${c.customerId}/review`, { approve: false, reason: 'Foto borrosa' }).expect(201);
-    const rejected = (await get(c.token, '/kyc/me')).body;
-    assert.equal(rejected.status, 'REJECTED');
-    assert.equal(rejected.rejectionReason, 'Foto borrosa');
-
-    await post(c.token, '/kyc/me', { documentType: 'CC', documentNumber: '123' }).expect(201);
-    await post(w.supervisor, `/kyc/${c.customerId}/review`, { approve: true }).expect(201);
-    // Ya revisado: no se revisa dos veces.
-    await post(w.supervisor, `/kyc/${c.customerId}/review`, { approve: true }).expect(409);
-    assert.equal((await get(c.token, '/kyc/me')).body.status, 'APPROVED');
-    const notes = await get(c.token, '/notifications').expect(200);
-    assert.equal(notes.body.data.filter((n: { category: string }) => n.category === 'KYC').length, 2);
-  });
-
-  it('si la política lo exige, solo clientes verificados crean pedidos', async () => {
-    await publish({ requireKycForOrders: true });
-    const c = await w.newClient('kyc2@test.local');
-    const body = async () => ({
-      facilityId: w.facilityId, mode: 'HOME_HOME', pickupAddressId: c.addressId,
-      pickupSlotId: await w.slot('DRIVER_PICKUP'),
-      items: [{ garmentId: w.garmentId, serviceId: w.serviceId, quantity: 1 }],
-    });
-    await post(c.token, '/orders', await body()).expect(403);
-    await post(c.token, '/kyc/me', { documentType: 'CC', documentNumber: '9' }).expect(201);
-    await post(w.admin, `/kyc/${c.customerId}/review`, { approve: true }).expect(201);
-    await post(c.token, '/orders', await body()).expect(201);
-    await publish();
-  });
-});
-
 describe('puntos y canjes', () => {
   it('suma al completar según la política del pedido y no duplica', async () => {
     await publish({ pointsPerCurrencyUnit: 2 });

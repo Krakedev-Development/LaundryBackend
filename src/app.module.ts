@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { CatalogModule } from './catalog/catalog.module';
 import { GeoModule } from './geo/geo.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { KycGuard } from './common/guards/kyc.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { validateEnv } from './config/env.validation';
 import { CustomersModule } from './customers/customers.module';
@@ -67,6 +68,7 @@ import { UsersModule } from './users/users.module';
     { provide: APP_GUARD, useClass: AppThrottlerGuard },
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: KycGuard },
   ],
 })
 export class AppModule {}

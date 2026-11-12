@@ -24,6 +24,55 @@ export class CustomersService {
     };
   }
 
+  // El cliente elige su plan; sin elegirlo no tiene membresía ni descuentos.
+  async setMembership(user: AuthUser, planId: string) {
+    const customer = await this.customerOf(user);
+    const plan = await this.prisma.membershipPlan.findFirst({
+      where: { id: planId, active: true },
+      select: { id: true, name: true },
+    });
+    if (!plan) throw new NotFoundException('El plan no existe o no está disponible.');
+    await this.prisma.customer.update({
+      where: { id: customer.id },
+      data: { membershipPlanId: plan.id },
+    });
+    return { membershipPlan: plan };
+  }
+
+  // Directorio del administrador: clientes con identidad aprobada.
+  async directory() {
+    const customers = await this.prisma.customer.findMany({
+      // Solo clientes con identidad aprobada; las solicitudes pendientes se revisan en KYC.
+      where: { kycStatus: 'APPROVED' },
+      orderBy: { createdAt: 'desc' },
+      include: {
+        user: { select: { name: true, email: true, phone: true } },
+        membershipPlan: { select: { id: true, name: true } },
+        addresses: {
+          where: { deletedAt: null },
+          orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+          select: { title: true, fullAddress: true, reference: true },
+        },
+        _count: { select: { orders: true } },
+      },
+    });
+    return customers.map((c) => ({
+      id: c.id,
+      name: c.user.name,
+      email: c.user.email,
+      phone: c.user.phone,
+      kycStatus: c.kycStatus,
+      membershipPlan: c.membershipPlan,
+      kycDocumentType: c.kycDocumentType,
+      kycDocumentNumber: c.kycDocumentNumber,
+      kycRejectionReason: c.kycRejectionReason,
+      kycReviewedAt: c.kycReviewedAt,
+      addresses: c.addresses,
+      totalOrders: c._count.orders,
+      createdAt: c.createdAt,
+    }));
+  }
+
   async listAddresses(user: AuthUser) {
     const customer = await this.customerOf(user);
     return this.prisma.address.findMany({

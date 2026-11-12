@@ -12,6 +12,7 @@ import {
   CurrentUser,
   Roles,
   type AuthUser,
+  AllowWithoutKyc,
 } from '../common/decorators/auth.decorators';
 import { NotificationsService } from './notifications.service';
 
@@ -22,6 +23,7 @@ class NotificationsQuery {
 }
 
 @Roles('CLIENT')
+@AllowWithoutKyc()
 @Controller('notifications')
 export class NotificationsController {
   constructor(private readonly notifications: NotificationsService) {}

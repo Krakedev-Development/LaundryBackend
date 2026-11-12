@@ -75,7 +75,6 @@ async function ensureActivePolicy(prisma: PrismaClient): Promise<void> {
       enforceDriverLimit: false,
       driverMayReorder: false,
       requireStorePickupSlot: false,
-      requireKycForOrders: false,
       handoffMaxAttempts: 3,
       handoffTtlMinutes: 60,
       pointsPerCurrencyUnit: new Prisma.Decimal('1.00'),

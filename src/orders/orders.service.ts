@@ -100,11 +100,6 @@ export class OrdersService {
     const customer = await this.customers.customerOf(user);
     const policy = await this.policies.requireActive();
 
-    if (policy.requireKycForOrders && customer.kycStatus !== 'APPROVED')
-      throw new ForbiddenException(
-        'Debes verificar tu identidad antes de crear pedidos.',
-      );
-
     if (policy.blockNewOrdersOnCharges) {
       const pending = await this.prisma.customerCharge.count({
         where: { customerId: customer.id, status: 'PENDING' },
