@@ -142,6 +142,70 @@ describe('gestión de personal', () => {
     await post(w.admin, '/users/staff', { ...base, email: 'sara@test.local', facilityId: w.facilityId }).expect(409);
   });
 
+  it('la actividad del supervisor reúne ingresos y acciones, del más reciente al más antiguo', async () => {
+    const id = await newSupervisor('activo@test.local');
+    const first = await loginAs('activo@test.local', TEMP).expect(200);
+    await post(first.body.tokens.accessToken, '/auth/change-password', {
+      currentPassword: TEMP,
+      newPassword: NEW,
+    }).expect(200);
+    const token = (await loginAs('activo@test.local', NEW).expect(200)).body.tokens.accessToken;
+    // 12 horarios + 2 ingresos = 14 registros: dos páginas de 10.
+    for (let i = 0; i < 12; i += 1)
+      await post(token, '/slots', {
+        facilityId: w.facilityId,
+        context: 'FACILITY_PICKUP',
+        date: '2099-07-01',
+        capacity: 3,
+        startTime: `${String(8 + i).padStart(2, '0')}:00`,
+        endTime: `${String(8 + i).padStart(2, '0')}:30`,
+      }).expect(201);
+
+    const res = await get(w.admin, `/users/${id}/activity`).expect(200);
+    assert.equal(res.body.user.email, 'activo@test.local');
+    assert.equal(res.body.user.facility.id, w.facilityId);
+    assert.equal(res.body.summary.logins, 2);
+    assert.equal(res.body.summary.actions, 12);
+    assert.ok(res.body.summary.lastLoginAt);
+    assert.equal(res.body.page, 1);
+    assert.equal(res.body.pageSize, 10);
+    assert.equal(res.body.total, 14);
+    assert.equal(res.body.totalPages, 2);
+    assert.equal(res.body.items.length, 10);
+
+    const second = await get(w.admin, `/users/${id}/activity?page=2`).expect(200);
+    assert.equal(second.body.items.length, 4);
+    // Las páginas no se repiten y, juntas, van de la más reciente a la más antigua.
+    const all = [...res.body.items, ...second.body.items];
+    assert.equal(new Set(all.map((i: { id: string }) => i.id)).size, 14);
+    const times = all.map((i: { createdAt: string }) => Date.parse(i.createdAt));
+    assert.deepEqual(times, [...times].sort((a, b) => b - a));
+    assert.deepEqual(
+      second.body.items.slice(-2).map((i: { action: string }) => i.action),
+      ['LOGIN', 'LOGIN'],
+    );
+    const third = await get(w.admin, `/users/${id}/activity?page=3`).expect(200);
+    assert.deepEqual(third.body.items, []);
+
+    // Un rango sin actividad queda vacío, pero el último ingreso se conserva.
+    const past = await get(w.admin, `/users/${id}/activity?from=2020-01-01&to=2020-01-31`).expect(200);
+    assert.deepEqual(past.body.items, []);
+    assert.equal(past.body.summary.logins, 0);
+    assert.ok(past.body.summary.lastLoginAt);
+  });
+
+  it('la actividad valida el rango y no existe para clientes', async () => {
+    const id = await newSupervisor('rango@test.local');
+    await get(w.admin, `/users/${id}/activity?from=2026-02-01&to=2026-01-01`).expect(400);
+    await get(w.admin, `/users/${id}/activity?from=2020-01-01&to=2026-01-01`).expect(400);
+    await get(w.admin, `/users/${id}/activity?from=ayer`).expect(400);
+    await get(w.admin, `/users/${id}/activity?pageSize=500`).expect(400);
+    await get(w.admin, `/users/${id}/activity?page=0`).expect(400);
+    const client = await t.prisma.user.findUniqueOrThrow({ where: { email: 'cli@test.local' } });
+    await get(w.admin, `/users/${client.id}/activity`).expect(404);
+    await get(w.supervisor, `/users/${id}/activity`).expect(403);
+  });
+
   it('las acciones quedan en la auditoría con quién las hizo', async () => {
     const actions = await t.prisma.auditLog.findMany({
       where: { action: { in: ['SUPERVISOR_CREATED', 'USER_SUSPENDED', 'USER_REACTIVATED', 'PASSWORD_RESET'] } },

@@ -19,6 +19,7 @@ const MATRIX: [string, string, Role[] | 'ANY'][] = [
   ['get', '/users/staff', ['ADMIN']],
   ['patch', `/users/${ID}/status`, ['ADMIN']],
   ['post', `/users/${ID}/reset-password`, ['ADMIN']],
+  ['get', `/users/${ID}/activity`, ['ADMIN']],
   ['post', '/zones', ['ADMIN']],
   ['patch', `/zones/${ID}`, ['ADMIN']],
   ['post', '/facilities', ['ADMIN']],

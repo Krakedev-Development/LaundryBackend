@@ -1,12 +1,17 @@
+import { Type } from 'class-transformer';
 import {
   IsEmail,
   IsIn,
+  IsInt,
+  IsISO8601,
   IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  Max,
   MaxLength,
+  Min,
 } from 'class-validator';
 import {
   PASSWORD_MESSAGE,
@@ -33,6 +38,14 @@ export class CreateDriverDto extends BaseAccountDto {
 export class SetUserStatusDto {
   @IsIn(['ACTIVE', 'SUSPENDED']) status: 'ACTIVE' | 'SUSPENDED';
   @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
+// Actividad de una cuenta en un rango de fechas (por defecto, los últimos 30 días).
+export class ActivityQueryDto {
+  @IsOptional() @IsISO8601({}, { message: 'La fecha inicial no es válida.' }) from?: string;
+  @IsOptional() @IsISO8601({}, { message: 'La fecha final no es válida.' }) to?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) page?: number;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(50) pageSize?: number;
 }
 
 // Contraseña temporal del personal: 8 a 12 caracteres con letras y números.

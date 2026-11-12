@@ -10,6 +10,8 @@ import type { AuthUser } from '../common/decorators/auth.decorators';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CreateDriverDto, CreateStaffDto } from './dto/users.dto';
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
@@ -194,6 +196,125 @@ export class UsersService {
       });
       return toPublic(updated);
     });
+  }
+
+  // Actividad de una cuenta del personal o chofer: une el registro de auditoría, los
+  // eventos de pedidos y la auditoría de custodia, del más reciente al más antiguo.
+  async activity(
+    id: string,
+    query: { from?: string; to?: string; page?: number; pageSize?: number },
+  ) {
+    const user = await this.prisma.user.findUnique({
+      where: { id },
+      include: { facility: { select: { id: true, name: true } } },
+    });
+    if (!user || user.role === 'CLIENT') throw new NotFoundException('La cuenta no existe.');
+
+    const to = query.to ? new Date(query.to) : new Date();
+    const from = query.from ? new Date(query.from) : new Date(to.getTime() - 30 * DAY_MS);
+    if (from > to)
+      throw new BadRequestException('La fecha inicial debe ser anterior a la final.');
+    if (to.getTime() - from.getTime() > 366 * DAY_MS)
+      throw new BadRequestException('El rango máximo es de un año.');
+    // Paginación sobre las tres fuentes unidas: para la página N basta con los
+    // N × tamaño registros más recientes de cada fuente; luego se ordena y se recorta.
+    const pageSize = query.pageSize ?? 10;
+    const page = query.page ?? 1;
+    const skip = (page - 1) * pageSize;
+    const take = skip + pageSize;
+    const createdAt = { gte: from, lte: to };
+
+    const [audits, orderEvents, handoffEvents, logins, lastLogin, auditTotal, orderTotal, handoffTotal] =
+      await Promise.all([
+        this.prisma.auditLog.findMany({
+          where: { actorId: id, createdAt },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take,
+        }),
+        this.prisma.orderEvent.findMany({
+          where: { actorId: id, createdAt },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take,
+          include: { order: { select: { number: true } } },
+        }),
+        this.prisma.handoffAudit.findMany({
+          where: { actorId: id, createdAt },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          take,
+          include: { handoff: { select: { type: true, order: { select: { id: true, number: true } } } } },
+        }),
+        this.prisma.auditLog.count({ where: { actorId: id, action: 'LOGIN', createdAt } }),
+        this.prisma.auditLog.findFirst({
+          where: { actorId: id, action: 'LOGIN' },
+          orderBy: { createdAt: 'desc' },
+          select: { createdAt: true },
+        }),
+        this.prisma.auditLog.count({ where: { actorId: id, createdAt } }),
+        this.prisma.orderEvent.count({ where: { actorId: id, createdAt } }),
+        this.prisma.handoffAudit.count({ where: { actorId: id, createdAt } }),
+      ]);
+
+    const merged = [
+      ...audits.map((a) => ({
+        id: a.id,
+        source: 'AUDIT' as const,
+        action: a.action,
+        entity: a.entity,
+        entityId: a.entityId,
+        orderNumber: null as number | null,
+        detail: a.reason,
+        createdAt: a.createdAt,
+      })),
+      ...orderEvents.map((e) => ({
+        id: e.id,
+        source: 'ORDER' as const,
+        action: `ORDER_${e.status}`,
+        entity: 'Order',
+        entityId: e.orderId,
+        orderNumber: e.order.number,
+        detail: e.title,
+        createdAt: e.createdAt,
+      })),
+      ...handoffEvents.map((h) => ({
+        id: h.id,
+        source: 'HANDOFF' as const,
+        action: `HANDOFF_${h.action}`,
+        entity: 'Order',
+        entityId: h.handoff.order.id,
+        orderNumber: h.handoff.order.number,
+        detail: h.reason ?? h.handoff.type,
+        createdAt: h.createdAt,
+      })),
+    ].sort(
+      (a, b) =>
+        b.createdAt.getTime() - a.createdAt.getTime() ||
+        (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
+    );
+    const items = merged.slice(skip, take);
+
+    const total = auditTotal + orderTotal + handoffTotal;
+    return {
+      user: {
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        status: user.status,
+        facility: user.facility,
+      },
+      range: { from, to },
+      summary: {
+        logins,
+        actions: total - logins,
+        lastLoginAt: lastLogin?.createdAt ?? null,
+        lastActivityAt: merged[0]?.createdAt ?? null,
+      },
+      items,
+      page,
+      pageSize,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / pageSize)),
+    };
   }
 
   // Solo cuentas de personal y choferes, y nunca la propia.

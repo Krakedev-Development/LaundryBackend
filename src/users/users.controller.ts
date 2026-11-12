@@ -1,10 +1,11 @@
-import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import {
   CurrentUser,
   Roles,
   type AuthUser,
 } from '../common/decorators/auth.decorators';
 import {
+  ActivityQueryDto,
   CreateDriverDto,
   CreateStaffDto,
   ResetPasswordDto,
@@ -40,6 +41,11 @@ export class UsersController {
     @Body() dto: SetUserStatusDto,
   ) {
     return this.users.setStatus(actor, id, dto);
+  }
+
+  @Get(':id/activity')
+  activity(@Param('id', ParseUUIDPipe) id: string, @Query() query: ActivityQueryDto) {
+    return this.users.activity(id, query);
   }
 
   @Post(':id/reset-password')
