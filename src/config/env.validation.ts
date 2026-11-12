@@ -1,11 +1,13 @@
 import { plainToInstance } from 'class-transformer';
 import {
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   Min,
   MinLength,
+  ValidateIf,
   validateSync,
 } from 'class-validator';
 
@@ -26,6 +28,20 @@ export class EnvironmentVariables {
   @IsInt() @Min(60) JWT_ACCESS_TTL_SECONDS: number;
   @IsString() @MinLength(32) JWT_REFRESH_SECRET: string;
   @IsInt() @Min(300) JWT_REFRESH_TTL_SECONDS: number;
+
+  // Correo saliente (códigos de recuperación). Sin SMTP_HOST, los correos se escriben
+  // en la consola; en producción es obligatorio.
+  @IsOptional() @IsString() NODE_ENV?: string;
+  @ValidateIf((env: EnvironmentVariables) => env.NODE_ENV === 'production')
+  @IsString()
+  @IsNotEmpty()
+  SMTP_HOST?: string;
+  @IsOptional() @IsInt() @Min(1) SMTP_PORT?: number;
+  // Texto 'true'/'false': la conversión implícita convertiría 'false' en verdadero.
+  @IsOptional() @IsIn(['true', 'false']) SMTP_SECURE?: string;
+  @IsOptional() @IsString() SMTP_USER?: string;
+  @IsOptional() @IsString() SMTP_PASS?: string;
+  @IsOptional() @IsString() MAIL_FROM?: string;
 }
 
 export function validateEnv(raw: Record<string, unknown>): EnvironmentVariables {

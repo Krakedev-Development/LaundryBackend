@@ -30,6 +30,16 @@ export class RefreshDto {
   @IsString() @IsNotEmpty() refreshToken: string;
 }
 
+export class RequestPasswordResetDto {
+  @IsEmail({}, { message: 'Ingresa un correo válido.' }) email: string;
+}
+
+export class ConfirmPasswordResetDto {
+  @IsEmail({}, { message: 'Ingresa un correo válido.' }) email: string;
+  @Matches(/^\d{6}$/, { message: 'El código tiene 6 dígitos.' }) code: string;
+  @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE }) newPassword: string;
+}
+
 export class ChangePasswordDto {
   @IsString() @IsNotEmpty() currentPassword: string;
   @Matches(PASSWORD_RULE, { message: PASSWORD_MESSAGE }) newPassword: string;

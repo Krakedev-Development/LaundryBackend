@@ -19,6 +19,8 @@ function useTestEnvironment(): void {
   process.env.JWT_REFRESH_SECRET = randomBytes(32).toString('hex');
   process.env.JWT_ACCESS_TTL_SECONDS = '900';
   process.env.JWT_REFRESH_TTL_SECONDS = '3600';
+  // Nunca se envían correos reales desde las pruebas: quedan en el buzón en memoria.
+  process.env.SMTP_HOST = '';
 }
 
 export const ADMIN_PASSWORD = 'AdminTest2026ok';

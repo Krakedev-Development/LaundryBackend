@@ -23,6 +23,7 @@ import { OrdersModule } from './orders/orders.module';
 import { SlotsModule } from './slots/slots.module';
 import { PolicyModule } from './policy/policy.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { MailModule } from './mail/mail.module';
 import { UsersModule } from './users/users.module';
 
 @Module({
@@ -34,18 +35,24 @@ import { UsersModule } from './users/users.module';
         const ttl = config.getOrThrow<number>('THROTTLE_TTL_SECONDS') * 1000;
         return [
           { name: 'default', ttl, limit: config.getOrThrow<number>('THROTTLE_LIMIT') },
-          // Freno adicional contra fuerza bruta: solo aplica a registro e inicio de sesión.
+          // Freno adicional contra fuerza bruta: registro, inicio de sesión y recuperación.
           {
             name: 'auth',
             ttl,
             limit: config.getOrThrow<number>('AUTH_THROTTLE_LIMIT'),
             skipIf: (ctx) =>
-              !['register', 'login'].includes(ctx.getHandler().name),
+              ![
+                'register',
+                'login',
+                'requestPasswordReset',
+                'confirmPasswordReset',
+              ].includes(ctx.getHandler().name),
           },
         ];
       },
     }),
     PrismaModule,
+    MailModule,
     PolicyModule,
     AuthModule,
     UsersModule,

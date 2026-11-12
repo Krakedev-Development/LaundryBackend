@@ -1,5 +1,6 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   UnauthorizedException,
@@ -8,8 +9,19 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
 import type { KycStatus, User } from '../generated/prisma/client';
+import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
-import type { ChangePasswordDto, LoginDto, RegisterDto } from './dto/auth.dto';
+import type {
+  ChangePasswordDto,
+  ConfirmPasswordResetDto,
+  LoginDto,
+  RegisterDto,
+  RequestPasswordResetDto,
+} from './dto/auth.dto';
+
+const RESET_TTL_MS = 15 * 60 * 1000;
+const RESET_COOLDOWN_MS = 60 * 1000;
+const RESET_MAX_ATTEMPTS = 5;
 
 export interface TokenPair {
   accessToken: string;
@@ -62,6 +74,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly mail: MailService,
   ) {}
 
   async register(
@@ -173,6 +186,114 @@ export class AuthService {
     });
     await this.revokeAll(userId);
     return this.issueTokens(updated);
+  }
+
+  // ---- Recuperación de contraseña por código (solo clientes; el personal y los
+  // choferes la restablecen con el administrador).
+
+  // Responde siempre lo mismo, exista o no la cuenta, para no revelar qué correos
+  // están registrados.
+  async requestPasswordReset(dto: RequestPasswordResetDto): Promise<{ message: string }> {
+    const message =
+      'Si el correo está registrado, te enviamos un código para restablecer tu contraseña.';
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email.trim().toLowerCase() },
+    });
+    if (!user || user.role !== 'CLIENT' || user.status === 'SUSPENDED') return { message };
+
+    // Un código nuevo por minuto como máximo: evita inundar el correo del cliente.
+    const recent = await this.prisma.passwordResetCode.findFirst({
+      where: { userId: user.id, createdAt: { gt: new Date(Date.now() - RESET_COOLDOWN_MS) } },
+    });
+    if (recent) return { message };
+
+    const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    await this.prisma.$transaction([
+      // Solo vale el último código emitido.
+      this.prisma.passwordResetCode.updateMany({
+        where: { userId: user.id, usedAt: null },
+        data: { usedAt: new Date() },
+      }),
+      this.prisma.passwordResetCode.create({
+        data: {
+          userId: user.id,
+          codeHash: this.resetHash(user.id, code),
+          expiresAt: new Date(Date.now() + RESET_TTL_MS),
+        },
+      }),
+    ]);
+    await this.mail.send({
+      to: user.email,
+      subject: 'Código para restablecer tu contraseña',
+      text: [
+        `Hola ${user.name},`,
+        '',
+        `Tu código para restablecer la contraseña de Laundry Clean Fresh es: ${code}`,
+        '',
+        `Vence en ${RESET_TTL_MS / 60_000} minutos y solo puede usarse una vez.`,
+        'Si no lo pediste, ignora este correo: tu contraseña no cambiará.',
+      ].join('\n'),
+    });
+    return { message };
+  }
+
+  async confirmPasswordReset(dto: ConfirmPasswordResetDto): Promise<{ message: string }> {
+    const invalid = new BadRequestException(
+      'El código no es válido o ya venció. Solicita uno nuevo.',
+    );
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email.trim().toLowerCase() },
+    });
+    if (!user || user.role !== 'CLIENT' || user.status === 'SUSPENDED') throw invalid;
+    const pending = await this.prisma.passwordResetCode.findFirst({
+      where: { userId: user.id, usedAt: null, expiresAt: { gt: new Date() } },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (!pending || pending.attempts >= RESET_MAX_ATTEMPTS) throw invalid;
+
+    const expected = Buffer.from(pending.codeHash, 'hex');
+    const given = Buffer.from(this.resetHash(user.id, dto.code), 'hex');
+    if (expected.length !== given.length || !timingSafeEqual(expected, given)) {
+      // Cada intento fallido cuenta; al llegar al límite el código queda inutilizado.
+      const attempts = pending.attempts + 1;
+      await this.prisma.passwordResetCode.update({
+        where: { id: pending.id },
+        data: { attempts, ...(attempts >= RESET_MAX_ATTEMPTS ? { usedAt: new Date() } : {}) },
+      });
+      throw invalid;
+    }
+
+    const passwordHash = await argon2.hash(dto.newPassword);
+    // El código se marca usado solo si nadie lo usó en paralelo.
+    await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.passwordResetCode.updateMany({
+        where: { id: pending.id, usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      if (claimed.count !== 1) throw invalid;
+      await tx.user.update({ where: { id: user.id }, data: { passwordHash } });
+      // Cierra todas las sesiones abiertas: quien tenía la contraseña anterior pierde acceso.
+      await tx.refreshToken.updateMany({
+        where: { userId: user.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id,
+          actorRole: user.role,
+          action: 'PASSWORD_RESET_BY_CODE',
+          entity: 'User',
+          entityId: user.id,
+        },
+      });
+    });
+    return { message: 'Tu contraseña fue actualizada. Ya puedes iniciar sesión.' };
+  }
+
+  private resetHash(userId: string, code: string): string {
+    return createHmac('sha256', this.config.getOrThrow<string>('JWT_REFRESH_SECRET'))
+      .update(`password-reset:${userId}:${code}`)
+      .digest('hex');
   }
 
   async me(userId: string): Promise<PublicUser> {

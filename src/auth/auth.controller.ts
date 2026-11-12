@@ -9,9 +9,11 @@ import {
 import { AuthService } from './auth.service';
 import {
   ChangePasswordDto,
+  ConfirmPasswordResetDto,
   LoginDto,
   RefreshDto,
   RegisterDto,
+  RequestPasswordResetDto,
 } from './dto/auth.dto';
 
 @AllowWithoutKyc()
@@ -37,6 +39,21 @@ export class AuthController {
   @Post('refresh')
   refresh(@Body() dto: RefreshDto) {
     return this.auth.refresh(dto.refreshToken);
+  }
+
+  // Recuperación de contraseña del cliente: código de 6 dígitos por correo.
+  @Public()
+  @HttpCode(200)
+  @Post('password-reset/request')
+  requestPasswordReset(@Body() dto: RequestPasswordResetDto) {
+    return this.auth.requestPasswordReset(dto);
+  }
+
+  @Public()
+  @HttpCode(200)
+  @Post('password-reset/confirm')
+  confirmPasswordReset(@Body() dto: ConfirmPasswordResetDto) {
+    return this.auth.confirmPasswordReset(dto);
   }
 
   @Public()
