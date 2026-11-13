@@ -36,7 +36,8 @@ export class CreateOrderDto {
   @IsUUID() pickupAddressId: string;
   @IsUUID() pickupSlotId: string;
 
-  // Exactamente uno de los dos: prendas (precio fijo) o peso estimado (precio por libra).
+  // Exactamente uno de los dos: prendas (precio fijo) o una bolsa del servicio por peso.
+  // Las libras estimadas y el precio por libra salen de la bolsa, nunca del cliente.
   @IsOptional()
   @IsArray()
   @ArrayMinSize(1)
@@ -44,7 +45,7 @@ export class CreateOrderDto {
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
   items?: OrderItemDto[];
-  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) estimatedWeightLb?: number;
+  @IsOptional() @IsUUID('all', { message: 'Selecciona una bolsa válida.' }) weightTierId?: string;
 
   @IsOptional() @IsArray() @ArrayUnique() @IsUUID('all', { each: true }) extraIds?: string[];
   @IsOptional()

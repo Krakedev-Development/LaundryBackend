@@ -36,6 +36,8 @@ export interface World {
   facilityId: string;
   garmentId: string;
   serviceId: string;
+  // Bolsa de ~10 lb a 1.5 por libra.
+  weightTierId: string;
   slot(context: string, capacity?: number): Promise<string>;
   newClient(email: string): Promise<Client>;
   newPendingClient(email: string): Promise<{ token: string; customerId: string }>;
@@ -69,6 +71,7 @@ export async function buildWorld(t: TestApp): Promise<World> {
     (await t.http.post(`${api}/catalog/${path}`).set(as).send(b).expect(201)).body.id as string;
   const garmentId = await mk('garments', { name: 'Camisa', basePrice: 3.5 });
   const serviceId = await mk('services', { name: 'Lavado', extraPrice: 1 });
+  const weightTierId = await mk('weight-tiers', { name: '1 bolsa', estimatedWeightLb: 10, pricePerPound: 1.5 });
 
   const sup = await createUser(t, { email: 'sup@test.local', role: 'SUPERVISOR' });
   await t.prisma.user.update({ where: { id: sup.id }, data: { facilityId } });
@@ -118,7 +121,7 @@ export async function buildWorld(t: TestApp): Promise<World> {
   };
 
   const world: World = {
-    t, admin, facilityId, garmentId, serviceId, driverId, slot, newClient, newPendingClient,
+    t, admin, facilityId, garmentId, serviceId, weightTierId, driverId, slot, newClient, newPendingClient,
     supervisor: await login(t, 'sup@test.local'),
     driverToken: await login(t, 'driver@test.local'),
     async order(c, over = {}) {

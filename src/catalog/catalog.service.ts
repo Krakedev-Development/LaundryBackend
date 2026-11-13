@@ -25,7 +25,9 @@ export type CatalogResource =
   | 'serviceType'
   | 'extra'
   | 'membershipPlan'
-  | 'reward';
+  | 'reward'
+  | 'weightTier'
+  | 'weightRestriction';
 
 const LABELS: Record<CatalogResource, string> = {
   garmentType: 'La prenda',
@@ -33,6 +35,14 @@ const LABELS: Record<CatalogResource, string> = {
   extra: 'El extra',
   membershipPlan: 'El plan',
   reward: 'La recompensa',
+  weightTier: 'La bolsa',
+  weightRestriction: 'La restricción',
+};
+
+// Bolsas y restricciones se muestran en el orden que define el administrador.
+const ORDER: Partial<Record<CatalogResource, object[]>> = {
+  weightTier: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+  weightRestriction: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
 };
 
 @Injectable()
@@ -46,7 +56,7 @@ export class CatalogService {
   list(resource: CatalogResource, includeInactive: boolean) {
     return this.delegate(resource).findMany({
       where: includeInactive ? {} : { active: true },
-      orderBy: { createdAt: 'asc' },
+      orderBy: ORDER[resource] ?? { createdAt: 'asc' },
     });
   }
 

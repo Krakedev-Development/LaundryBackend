@@ -470,6 +470,31 @@ model ServiceType {
   items OrderItem[]
 }
 
+// Rango de carga del servicio por peso: el cliente elige cuántas bolsas entregará.
+// Cada rango tiene su propio precio por libra; no existe un precio general.
+model WeightTier {
+  id                String   @id @default(uuid()) @db.Uuid
+  name              String   @unique
+  estimatedWeightLb Decimal  @db.Decimal(10, 2)
+  pricePerPound     Decimal  @db.Decimal(12, 4)
+  sortOrder         Int      @default(0)
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  orders Order[]
+}
+
+// Prendas o casos que el servicio por peso no acepta; la app los muestra antes de elegir bolsa.
+model WeightRestriction {
+  id        String   @id @default(uuid()) @db.Uuid
+  text      String   @unique
+  sortOrder Int      @default(0)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 model Extra {
   id          String   @id @default(uuid()) @db.Uuid
   name        String   @unique
@@ -582,8 +607,10 @@ model Order {
   paymentStatus    PaymentStatus
   paymentMethodKind PaymentMethodKind?
   estimatedWeightLb Decimal? @db.Decimal(10, 2)
-  // Precio por libra vigente al crear: congela la politica aplicada.
+  // Precio por libra del rango elegido, congelado al crear: cambios posteriores no lo afectan.
   pricePerPound     Decimal? @db.Decimal(12, 4)
+  weightTierId      String?  @db.Uuid
+  weightTier        WeightTier? @relation(fields: [weightTierId], references: [id])
   itemsSubtotal     Decimal  @default(0) @db.Decimal(12, 2)
   extrasTotal       Decimal  @default(0) @db.Decimal(12, 2)
   discount          Decimal  @default(0) @db.Decimal(12, 2)
