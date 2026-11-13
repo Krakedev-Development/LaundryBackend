@@ -63,8 +63,9 @@ export class CustomersController {
   }
 }
 
-// Directorio para el administrador: clientes registrados, con o sin verificación aprobada.
-@Roles('ADMIN')
+// Directorio de clientes aprobados, para administrador y supervisor. La revisión de
+// identidad (KYC) sigue siendo exclusiva del administrador en su propio módulo.
+@Roles('ADMIN', 'SUPERVISOR')
 @Controller('customers')
 export class CustomersDirectoryController {
   constructor(private readonly customers: CustomersService) {}

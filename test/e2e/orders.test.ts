@@ -39,6 +39,8 @@ let facilityId: string;
 let garmentId: string;
 let serviceId: string;
 let extraId: string;
+let smallTierId: string;
+let bigTierId: string;
 let driverId: string;
 let driverToken: string;
 let otherDriverToken: string;
@@ -127,6 +129,8 @@ before(async () => {
   garmentId = await mk('garments', { name: 'Camisa', basePrice: 3.5 });
   serviceId = await mk('services', { name: 'Lavado', extraPrice: 1 });
   extraId = await mk('extras', { name: 'Perfume', price: 2 });
+  smallTierId = await mk('weight-tiers', { name: '1 bolsa', estimatedWeightLb: 10, pricePerPound: 1.5, sortOrder: 1 });
+  bigTierId = await mk('weight-tiers', { name: '3+ bolsas', estimatedWeightLb: 35, pricePerPound: 1.2, sortOrder: 3 });
   await mk('promotions', { code: 'DIEZ', discountType: 'PERCENTAGE', discountValue: 10 });
 
   const d1 = await createUser(t, { email: 'driver1@test.local', role: 'DRIVER' });
@@ -174,19 +178,69 @@ describe('creación de pedidos', () => {
     await createOrder(c.token, await body(c, { promotionCode: 'NOEXISTE' })).expect(404);
   });
 
-  it('por peso usa el precio por libra de la política', async () => {
-    const res = await createOrder(
+  it('por peso cada bolsa cobra su propio precio por libra y lo congela', async () => {
+    const one = await createOrder(
       c.token,
-      await body(c, { items: undefined, estimatedWeightLb: 10 }),
+      await body(c, { items: undefined, weightTierId: smallTierId }),
     ).expect(201);
-    assert.equal(res.body.pricingModel, 'PER_WEIGHT');
-    assert.equal(res.body.pricingStatus, 'PENDING_WEIGHT');
-    assert.equal(res.body.itemsSubtotal, '15');
+    assert.equal(one.body.pricingModel, 'PER_WEIGHT');
+    assert.equal(one.body.pricingStatus, 'PENDING_WEIGHT');
+    assert.equal(one.body.estimatedWeightLb, '10');
+    assert.equal(one.body.pricePerPound, '1.5');
+    assert.equal(one.body.itemsSubtotal, '15'); // 10 lb x 1.5
+    assert.equal(one.body.weightTier.name, '1 bolsa');
+
+    const three = await createOrder(
+      c.token,
+      await body(c, { items: undefined, weightTierId: bigTierId }),
+    ).expect(201);
+    assert.equal(three.body.pricePerPound, '1.2');
+    assert.equal(three.body.itemsSubtotal, '42'); // 35 lb x 1.2
+
+    // Cambiar el precio de la bolsa no altera las solicitudes ya creadas.
+    await t.http
+      .patch(`${api}/catalog/weight-tiers/${smallTierId}`)
+      .set(as(admin))
+      .send({ pricePerPound: 2 })
+      .expect(200);
+    const kept = await t.prisma.order.findUniqueOrThrow({ where: { id: one.body.id } });
+    assert.equal(kept.pricePerPound?.toString(), '1.5');
+    await t.http
+      .patch(`${api}/catalog/weight-tiers/${smallTierId}`)
+      .set(as(admin))
+      .send({ pricePerPound: 1.5 })
+      .expect(200);
   });
 
-  it('exige exactamente items o peso', async () => {
-    await createOrder(c.token, await body(c, { estimatedWeightLb: 3 })).expect(400);
+  it('una bolsa desactivada o inexistente no se puede elegir', async () => {
+    const off = await t.http
+      .post(`${api}/catalog/weight-tiers`)
+      .set(as(admin))
+      .send({ name: 'Retirada', estimatedWeightLb: 5, pricePerPound: 1 })
+      .expect(201);
+    await t.http
+      .patch(`${api}/catalog/weight-tiers/${off.body.id}`)
+      .set(as(admin))
+      .send({ active: false })
+      .expect(200);
+    const res = await createOrder(
+      c.token,
+      await body(c, { items: undefined, weightTierId: off.body.id }),
+    ).expect(422);
+    assert.match(res.body.message, /bolsa/);
+    await createOrder(
+      c.token,
+      await body(c, { items: undefined, weightTierId: '00000000-0000-4000-8000-000000000000' }),
+    ).expect(422);
+  });
+
+  it('exige exactamente items o bolsa, y no acepta libras enviadas por el cliente', async () => {
+    await createOrder(c.token, await body(c, { weightTierId: smallTierId })).expect(400);
     await createOrder(c.token, await body(c, { items: undefined })).expect(400);
+    await createOrder(
+      c.token,
+      await body(c, { items: undefined, weightTierId: smallTierId, estimatedWeightLb: 1 }),
+    ).expect(400);
   });
 
   it('rechaza el precio enviado por el cliente y datos fuera de cobertura', async () => {

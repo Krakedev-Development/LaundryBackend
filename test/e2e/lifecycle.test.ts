@@ -307,7 +307,7 @@ describe('pedidos por peso', () => {
   async function weighable(email: string, grams: number) {
     const c = await w.newClient(email);
     await w.credit(c.customerId, 100);
-    const id = await w.order(c, { items: undefined, estimatedWeightLb: 10 });
+    const id = await w.order(c, { items: undefined, weightTierId: w.weightTierId });
     // 10 lb x 1.5 = 15; logística 5; IVA 2; total 22
     await post(c.token, `/orders/${id}/pay`, { expectedVersion: 1 }).expect(201);
     await t.prisma.order.update({ where: { id }, data: { status: 'WEIGHING' } });

@@ -263,7 +263,7 @@ describe('límite de reenvíos', () => {
 });
 
 describe('directorio de clientes y membresía', () => {
-  it('lista solo clientes aprobados, y solo al administrador', async () => {
+  it('lista solo clientes aprobados, al administrador y al supervisor', async () => {
     const pending = await submitted('directorio-pendiente@test.local');
     const approved = await w.newClient('directorio-aprobado@test.local');
 
@@ -277,8 +277,15 @@ describe('directorio de clientes y membresía', () => {
     const after = (await get(w.admin, '/customers').expect(200)).body;
     assert.ok(after.some((r: { id: string }) => r.id === pending.customerId));
 
+    // El supervisor ve el mismo directorio, pero no la cola ni los documentos de KYC.
+    const supervisorRows = (await get(w.supervisor, '/customers').expect(200)).body;
+    assert.deepEqual(
+      supervisorRows.map((r: { id: string }) => r.id).sort(),
+      after.map((r: { id: string }) => r.id).sort(),
+    );
+    await get(w.supervisor, '/kyc').expect(403);
     await get(pending.token, '/customers').expect(403);
-    await get(w.supervisor, '/customers').expect(403);
+    await get(w.driverToken, '/customers').expect(403);
   });
 
   it('sin plan elegido no hay membresía; el cliente la elige y se refleja en todas partes', async () => {

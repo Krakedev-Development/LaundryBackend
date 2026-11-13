@@ -15,7 +15,11 @@ export function throttleTracker(req: TrackedRequest): string {
   const ip = req.ip ?? 'unknown';
   const path = req.path ?? req.originalUrl ?? '';
   const email = req.body?.email;
-  if (path.endsWith('/auth/login') && typeof email === 'string')
+  const perAccount =
+    path.endsWith('/auth/login') ||
+    path.endsWith('/auth/password-reset/request') ||
+    path.endsWith('/auth/password-reset/confirm');
+  if (perAccount && typeof email === 'string')
     return `${ip}|${email.trim().toLowerCase().slice(0, 254)}`;
   return ip;
 }

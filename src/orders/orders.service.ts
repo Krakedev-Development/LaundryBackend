@@ -49,6 +49,7 @@ const ORDER_INCLUDE = {
   extras: true,
   legs: { include: { slot: true, driver: { select: { userId: true } } }, orderBy: { kind: 'asc' } },
   events: { orderBy: { createdAt: 'asc' } },
+  weightTier: { select: { id: true, name: true } },
   customer: {
     select: {
       id: true,
@@ -93,9 +94,9 @@ export class OrdersService {
     }
 
     const hasItems = !!dto.items?.length;
-    if (hasItems === (dto.estimatedWeightLb !== undefined))
+    if (hasItems === (dto.weightTierId !== undefined))
       throw new BadRequestException(
-        'Envía exactamente uno: items (precio fijo) o estimatedWeightLb (precio por libra).',
+        'Envía exactamente uno: items (precio fijo) o weightTierId (bolsa del servicio por peso).',
       );
 
     const customer = await this.customers.customerOf(user);
@@ -182,9 +183,8 @@ export class OrdersService {
       : null;
 
     const perWeight = !hasItems;
-    const pricePerPound = perWeight
-      ? new D(await this.policies.requireParam('pricePerPound', policy))
-      : undefined;
+    const tier = perWeight ? await this.activeWeightTier(dto.weightTierId!) : null;
+    const pricePerPound = tier ? new D(tier.pricePerPound) : undefined;
     const taxRate = new D(await this.policies.requireParam('taxRate', policy));
     const taxIncluded = await this.policies.requireParam('taxIncluded', policy);
     const pickupFee = new D(await this.policies.requireParam('pickupFee', policy));
@@ -195,7 +195,7 @@ export class OrdersService {
 
     const price = computePricing({
       items: lines,
-      weightLb: perWeight ? new D(dto.estimatedWeightLb!) : undefined,
+      weightLb: tier ? new D(tier.estimatedWeightLb) : undefined,
       pricePerPound,
       extras: extras.map((e) => new D(e.price)),
       membershipPercent: plan?.active ? new D(plan.garmentDiscountPercent) : new D(0),
@@ -243,8 +243,9 @@ export class OrdersService {
             pricingStatus: perWeight ? 'PENDING_WEIGHT' : 'CALCULATED',
             paymentStatus: 'PENDING',
             paymentMethodKind: dto.paymentMethodKind,
-            estimatedWeightLb: perWeight ? dto.estimatedWeightLb : null,
+            estimatedWeightLb: tier?.estimatedWeightLb ?? null,
             pricePerPound: pricePerPound ?? null,
+            weightTierId: tier?.id ?? null,
             itemsSubtotal: price.itemsSubtotal,
             extrasTotal: price.extrasTotal,
             discount: price.discount,
@@ -825,6 +826,13 @@ export class OrdersService {
     if (extras.length !== ids.length)
       throw new UnprocessableEntityException('Un extra no existe o está inactivo.');
     return extras;
+  }
+
+  private async activeWeightTier(id: string) {
+    const tier = await this.prisma.weightTier.findUnique({ where: { id } });
+    if (!tier || !tier.active)
+      throw new UnprocessableEntityException('La bolsa elegida no existe o ya no está disponible.');
+    return tier;
   }
 
   private async findPromotion(code: string) {

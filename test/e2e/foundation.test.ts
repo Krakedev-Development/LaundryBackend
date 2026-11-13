@@ -157,6 +157,21 @@ describe('zonas y sedes', () => {
       .send({ active: false })
       .expect(409);
   });
+  it('rechaza capacidad nula y zonas sin identificador real con mensajes claros', async () => {
+    const base = { name: 'S', address: 'A', latitude: 5, longitude: 5 };
+    const noCapacity = await t.http
+      .post(`${api}/facilities`)
+      .set(bearer(admin))
+      .send({ ...base, zoneId, dailyCapacity: 0 })
+      .expect(400);
+    assert.match(noCapacity.text, /La capacidad diaria debe ser de al menos 1 kg/);
+    const localZone = await t.http
+      .post(`${api}/facilities`)
+      .set(bearer(admin))
+      .send({ ...base, zoneId: 'ZONA-123', dailyCapacity: 10 })
+      .expect(400);
+    assert.match(localZone.text, /Selecciona una zona válida/);
+  });
   it('los cambios quedan auditados', async () => {
     assert.ok((await t.prisma.auditLog.count({ where: { entity: 'Zone' } })) >= 1);
     assert.ok((await t.prisma.auditLog.count({ where: { entity: 'Facility' } })) >= 1);
@@ -191,6 +206,57 @@ describe('catálogo y promociones', () => {
     assert.equal((await visible()).body.length, 0);
     const all = await t.http.get(`${api}/catalog/garments`).set(bearer(admin));
     assert.equal(all.body.length, 1);
+  });
+
+  it('servicio por peso: bolsas con su precio y restricciones en el orden del administrador', async () => {
+    const tier = (b: object) =>
+      t.http.post(`${api}/catalog/weight-tiers`).set(bearer(admin)).send(b);
+    // Cada bolsa exige libras y precio por libra positivos.
+    await tier({ name: 'Sin precio', estimatedWeightLb: 10 }).expect(400);
+    const bad = await tier({ name: 'Cero', estimatedWeightLb: 10, pricePerPound: 0 }).expect(400);
+    assert.match(JSON.stringify(bad.body.message), /precio por libra debe ser mayor a cero/);
+    await tier({ name: 'Negativa', estimatedWeightLb: -1, pricePerPound: 2 }).expect(400);
+    await tier({ name: '2 bolsas', estimatedWeightLb: 20, pricePerPound: 2, sortOrder: 2 }).expect(201);
+    const first = await tier({ name: '1 bolsa', estimatedWeightLb: 10, pricePerPound: 2.2, sortOrder: 1 }).expect(201);
+    await tier({ name: '1 bolsa', estimatedWeightLb: 12, pricePerPound: 2 }).expect(409);
+    await t.http
+      .post(`${api}/catalog/weight-tiers`)
+      .set(bearer(client))
+      .send({ name: 'Cliente', estimatedWeightLb: 5, pricePerPound: 1 })
+      .expect(403);
+
+    const listed = await t.http.get(`${api}/catalog/weight-tiers`).expect(200);
+    assert.deepEqual(listed.body.map((x: { name: string }) => x.name), ['1 bolsa', '2 bolsas']);
+    assert.equal(listed.body[0].pricePerPound, '2.2');
+
+    await t.http
+      .patch(`${api}/catalog/weight-tiers/${first.body.id}`)
+      .set(bearer(admin))
+      .send({ active: false })
+      .expect(200);
+    const visible = await t.http.get(`${api}/catalog/weight-tiers`).set(bearer(client));
+    assert.deepEqual(visible.body.map((x: { name: string }) => x.name), ['2 bolsas']);
+
+    const rule = (text: string, sortOrder: number) =>
+      t.http
+        .post(`${api}/catalog/weight-restrictions`)
+        .set(bearer(admin))
+        .send({ text, sortOrder });
+    await rule('NO aplica para trajes de paño.', 2).expect(201);
+    const edredon = await rule('NO aplica para edredones gruesos.', 1).expect(201);
+    await rule('', 3).expect(400);
+    const rules = await t.http.get(`${api}/catalog/weight-restrictions`).expect(200);
+    assert.deepEqual(
+      rules.body.map((x: { text: string }) => x.text),
+      ['NO aplica para edredones gruesos.', 'NO aplica para trajes de paño.'],
+    );
+    await t.http
+      .patch(`${api}/catalog/weight-restrictions/${edredon.body.id}`)
+      .set(bearer(admin))
+      .send({ active: false })
+      .expect(200);
+    const after = await t.http.get(`${api}/catalog/weight-restrictions`).expect(200);
+    assert.equal(after.body.length, 1);
   });
   it('valida promociones', async () => {
     const base = { code: 'PROMO1', discountType: 'PERCENTAGE', discountValue: 10 };

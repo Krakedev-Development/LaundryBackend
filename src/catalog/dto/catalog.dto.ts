@@ -52,6 +52,29 @@ export class UpdateExtraDto extends PartialType(CreateExtraDto) {
   @IsOptional() @IsBoolean() active?: boolean;
 }
 
+export class CreateWeightTierDto {
+  @IsString() @IsNotEmpty() @MaxLength(40) name: string;
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'Las libras estimadas admiten hasta 2 decimales.' })
+  @Min(0.01, { message: 'Las libras estimadas deben ser mayores a cero.' })
+  @Max(1000, { message: 'Las libras estimadas no pueden superar 1000.' })
+  estimatedWeightLb: number;
+  @IsNumber({ maxDecimalPlaces: 4 }, { message: 'El precio por libra admite hasta 4 decimales.' })
+  @Min(0.01, { message: 'El precio por libra debe ser mayor a cero.' })
+  pricePerPound: number;
+  @IsOptional() @IsInt() @Min(0) sortOrder?: number;
+}
+export class UpdateWeightTierDto extends PartialType(CreateWeightTierDto) {
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+export class CreateWeightRestrictionDto {
+  @IsString() @IsNotEmpty() @MaxLength(200) text: string;
+  @IsOptional() @IsInt() @Min(0) sortOrder?: number;
+}
+export class UpdateWeightRestrictionDto extends PartialType(CreateWeightRestrictionDto) {
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
 export class CreatePromotionDto {
   @Matches(/^[A-Z0-9_-]{3,32}$/, {
     message: 'El código admite A-Z, 0-9, guion y guion bajo (3 a 32).',

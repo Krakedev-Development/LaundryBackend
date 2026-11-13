@@ -195,6 +195,19 @@ const REWARDS: Array<{
   },
 ];
 
+// Servicio por peso: valores iniciales; el administrador ajusta el precio de cada bolsa en la web.
+const WEIGHT_TIERS = [
+  { name: '1 bolsa', estimatedWeightLb: '10', pricePerPound: '2.20', sortOrder: 1 },
+  { name: '2 bolsas', estimatedWeightLb: '20', pricePerPound: '2.20', sortOrder: 2 },
+  { name: '3+ bolsas', estimatedWeightLb: '35', pricePerPound: '2.20', sortOrder: 3 },
+];
+
+const WEIGHT_RESTRICTIONS = [
+  'NO aplica para edredones gruesos o plumones.',
+  'NO aplica para vestidos con pedrería o pedrería fina.',
+  'NO aplica para trajes de paño formal o prendas delicadas de tintorería.',
+];
+
 async function main() {
   const prisma = new PrismaClient({
     adapter: new PrismaPg({ connectionString: required('DATABASE_URL') }),
@@ -372,6 +385,33 @@ async function main() {
         console.log(
           `[Reward] Creada: ${reward.title} (${reward.pointsCost} pts - ${reward.category})`,
         );
+      }
+    }
+
+    // 7. Servicio por peso: bolsas y restricciones
+    for (const tier of WEIGHT_TIERS) {
+      const existing = await prisma.weightTier.findUnique({ where: { name: tier.name } });
+      if (existing) {
+        console.log(`[WeightTier] Ya existe: ${tier.name}`);
+      } else {
+        await prisma.weightTier.create({
+          data: {
+            name: tier.name,
+            estimatedWeightLb: new Prisma.Decimal(tier.estimatedWeightLb),
+            pricePerPound: new Prisma.Decimal(tier.pricePerPound),
+            sortOrder: tier.sortOrder,
+          },
+        });
+        console.log(`[WeightTier] Creada: ${tier.name} (~${tier.estimatedWeightLb} lb, $${tier.pricePerPound}/lb)`);
+      }
+    }
+    for (const [i, text] of WEIGHT_RESTRICTIONS.entries()) {
+      const existing = await prisma.weightRestriction.findUnique({ where: { text } });
+      if (existing) {
+        console.log(`[WeightRestriction] Ya existe: ${text}`);
+      } else {
+        await prisma.weightRestriction.create({ data: { text, sortOrder: i + 1 } });
+        console.log(`[WeightRestriction] Creada: ${text}`);
       }
     }
 

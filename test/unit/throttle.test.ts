@@ -16,6 +16,13 @@ describe('throttleTracker', () => {
       '1.2.3.4|ana@example.com',
     );
   });
+  it('la recuperación de contraseña también se limita por cuenta', () => {
+    for (const path of ['/api/v1/auth/password-reset/request', '/api/v1/auth/password-reset/confirm'])
+      assert.equal(
+        throttleTracker({ ip: '1.2.3.4', path, body: { email: 'Ana@Example.com' } }),
+        '1.2.3.4|ana@example.com',
+      );
+  });
   it('un cuerpo sin correo cae a la IP y el correo se acota en longitud', () => {
     assert.equal(throttleTracker({ ip: 'x', path: '/auth/login', body: {} }), 'x');
     const long = 'a'.repeat(500) + '@x.com';
