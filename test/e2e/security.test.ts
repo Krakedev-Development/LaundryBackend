@@ -43,6 +43,7 @@ const MATRIX: [string, string, Role[] | 'ANY'][] = [
   ['post', `/orders/${ID}/cancel`, ['CLIENT', 'ADMIN', 'SUPERVISOR']],
   ['post', `/orders/${ID}/pay`, ['CLIENT']],
   ['post', `/orders/${ID}/complete`, ['ADMIN', 'SUPERVISOR']],
+  ['post', `/orders/${ID}/confirm-payment`, ['ADMIN', 'SUPERVISOR']],
   ['post', `/orders/${ID}/weight`, ['ADMIN', 'SUPERVISOR']],
   ['post', `/orders/${ID}/adjustments`, ['ADMIN', 'SUPERVISOR']],
   ['post', `/orders/${ID}/adjustments/${ID}/decision`, ['CLIENT']],
