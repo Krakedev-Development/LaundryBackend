@@ -24,6 +24,7 @@ import { SlotsModule } from './slots/slots.module';
 import { PolicyModule } from './policy/policy.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { UsersModule } from './users/users.module';
+import { DriversModule } from './drivers/drivers.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { UsersModule } from './users/users.module';
     PolicyModule,
     AuthModule,
     UsersModule,
+    DriversModule,
     GeoModule,
     CatalogModule,
     SlotsModule,

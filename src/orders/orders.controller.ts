@@ -18,6 +18,7 @@ import {
 import {
   AssignDriverDto,
   CancelOrderDto,
+  ConfirmPaymentDto,
   CreateOrderDto,
   ListOrdersQuery,
   ScheduleOutboundDto,
@@ -54,6 +55,12 @@ export class OrdersController {
   @Get(':id')
   get(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
     return this.orders.get(user, id);
+  }
+
+  @Roles('CLIENT', 'ADMIN', 'SUPERVISOR', 'DRIVER')
+  @Get(':id/tracking')
+  tracking(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.orders.tracking(user, id);
   }
 
   @Post(':id/transitions')
@@ -104,6 +111,17 @@ export class OrdersController {
     @Body() dto: VersionedDto,
   ) {
     return this.orders.pay(user, id, dto);
+  }
+
+  // El personal confirma un pago recibido fuera de la app (p. ej. transferencia verificada).
+  @Roles('ADMIN', 'SUPERVISOR')
+  @Post(':id/confirm-payment')
+  confirmPayment(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ConfirmPaymentDto,
+  ) {
+    return this.orders.confirmPayment(user, id, dto);
   }
 
   @Roles('ADMIN', 'SUPERVISOR')

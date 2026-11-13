@@ -39,6 +39,7 @@ import {
   type Gate,
 } from './order-state-machine';
 import { computePricing } from './pricing';
+import { trackingLegFor } from './tracking';
 
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
@@ -597,6 +598,58 @@ export class OrdersService {
     });
   }
 
+  // Confirmación manual del personal (transferencia o pago fuera de la app). El dinero externo
+  // se asienta como abono y pago del pedido en el mismo acto: el saldo de la billetera no cambia
+  // y el pedido queda pagado para el cierre y para un eventual reembolso.
+  async confirmPayment(user: AuthUser, id: string, dto: { expectedVersion: number; note?: string }) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+    if (user.role !== 'ADMIN' && user.role !== 'SUPERVISOR')
+      throw new ForbiddenException('Solo el personal confirma pagos manuales.');
+    this.assertVersion(order, dto.expectedVersion);
+    if (order.status !== 'PAYMENT_PENDING')
+      throw new ConflictException('Solo se confirma el pago de un pedido pendiente de pago.');
+
+    const note = dto.note?.trim() || 'Pago confirmado por administración';
+    return this.prisma.$transaction(async (tx) => {
+      await this.wallet.lockCustomer(tx, order.customerId);
+      const outstanding = new D(order.total).sub(await this.paidAmount(tx, id));
+      if (outstanding.gt(0)) {
+        await this.wallet.post(tx, {
+          customerId: order.customerId,
+          orderId: id,
+          type: 'CREDIT',
+          amount: outstanding,
+          reference: `ORDER:${order.number}:MANUAL_PAYMENT`,
+          description: note,
+          idempotencyKey: `order-manual-credit:${id}`,
+        });
+        await this.wallet.post(tx, {
+          customerId: order.customerId,
+          orderId: id,
+          type: 'DEBIT',
+          amount: outstanding.neg(),
+          reference: `ORDER:${order.number}`,
+          description: 'Pago del pedido (confirmación manual)',
+          idempotencyKey: `order-payment:${id}:v${order.version}`,
+        });
+      }
+      await this.applyTransition(tx, order, 'CONFIRMED', user, note);
+      await tx.order.update({
+        where: { id },
+        data: { paymentStatus: 'PAID', paymentMethodKind: 'TRANSFER' },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id, actorRole: user.role, action: 'ORDER_PAYMENT_CONFIRMED',
+          entity: 'Order', entityId: id, reason: note,
+          after: { amount: outstanding.toString() },
+        },
+      });
+      return this.view(await this.loadOrder(id, tx));
+    });
+  }
+
   // Cierra el pedido entregado. Requiere que no quede saldo por cobrar.
   async complete(user: AuthUser, id: string, dto: { expectedVersion: number }) {
     const order = await this.loadOrder(id);
@@ -831,6 +884,63 @@ export class OrdersService {
     const order = await db.order.findUnique({ where: { id }, include: ORDER_INCLUDE });
     if (!order) throw new NotFoundException('El pedido no existe.');
     return order;
+  }
+
+  // ------------------------------------------------------------------ Seguimiento en vivo
+
+  // Vista táctica del pedido: tramo activo, dirección del cliente, sede y chofer con su
+  // última ubicación. Aplica la misma visibilidad que el detalle del pedido.
+  async tracking(user: AuthUser, id: string) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+    const activeLeg = trackingLegFor(order.status);
+    const leg = activeLeg ? order.legs.find((l) => l.kind === activeLeg) : undefined;
+    // Sin tramo activo se muestra la dirección de recogida del cliente.
+    const addressLeg = leg ?? order.legs.find((l) => l.kind === 'INBOUND')!;
+
+    const facility = await this.prisma.facility.findUniqueOrThrow({
+      where: { id: order.facilityId },
+      select: { id: true, name: true, address: true, latitude: true, longitude: true },
+    });
+    const driver = leg?.driverId
+      ? await this.prisma.driver.findUnique({
+          where: { id: leg.driverId },
+          include: { user: { select: { name: true, phone: true } } },
+        })
+      : null;
+
+    return {
+      orderId: order.id,
+      orderNumber: order.number,
+      status: order.status,
+      mode: order.mode,
+      activeLeg,
+      customerAddress: {
+        text: addressLeg.addressText,
+        latitude: Number(addressLeg.latitude),
+        longitude: Number(addressLeg.longitude),
+      },
+      facility: {
+        id: facility.id,
+        name: facility.name,
+        address: facility.address,
+        latitude: Number(facility.latitude),
+        longitude: Number(facility.longitude),
+      },
+      assignedDriver: driver
+        ? {
+            driverId: driver.id,
+            name: driver.user.name,
+            phone: driver.user.phone,
+            plate: driver.plate,
+            vehicle: driver.vehicle,
+            status: driver.status,
+            latitude: driver.latitude === null ? null : Number(driver.latitude),
+            longitude: driver.longitude === null ? null : Number(driver.longitude),
+            locationAt: driver.locationAt ? driver.locationAt.toISOString() : null,
+          }
+        : null,
+    };
   }
 
   private view(order: FullOrder) {

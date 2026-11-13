@@ -70,6 +70,10 @@ export class TransitionDto extends VersionedDto {
   @IsOptional() @IsString() @MaxLength(300) note?: string;
 }
 
+export class ConfirmPaymentDto extends VersionedDto {
+  @IsOptional() @IsString() @MaxLength(300) note?: string;
+}
+
 export class CancelOrderDto extends VersionedDto {
   @IsString() @IsNotEmpty() @MaxLength(300) reason: string;
 }
