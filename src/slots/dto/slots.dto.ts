@@ -6,6 +6,7 @@ import {
   IsOptional,
   IsUUID,
   Matches,
+  Max,
   Min,
 } from 'class-validator';
 
@@ -32,6 +33,32 @@ export class CreateSlotDto {
 export class UpdateSlotDto {
   @IsOptional() @IsInt() @Min(1) capacity?: number;
   @IsOptional() @IsBoolean() active?: boolean;
+}
+
+// ---- Plantilla semanal
+
+export class CreateSlotTemplateDto {
+  @IsUUID() facilityId: string;
+  @IsIn(SLOT_CONTEXTS) context: SlotContextValue;
+  // 0 = domingo ... 6 = sábado.
+  @IsInt() @Min(0) @Max(6) weekday: number;
+  @Matches(TIME, { message: 'startTime debe tener formato HH:mm.' }) startTime: string;
+  @Matches(TIME, { message: 'endTime debe tener formato HH:mm.' }) endTime: string;
+  @IsInt() @Min(1) capacity: number;
+}
+
+export class UpdateSlotTemplateDto {
+  @IsOptional() @IsInt() @Min(1) capacity?: number;
+  @IsOptional() @IsBoolean() active?: boolean;
+}
+
+export class ListSlotTemplatesQuery {
+  @IsOptional() @IsUUID() facilityId?: string;
+  @IsOptional() @IsIn(SLOT_CONTEXTS) context?: SlotContextValue;
+}
+
+export class GenerateSlotsDto {
+  @IsOptional() @IsUUID() facilityId?: string;
 }
 
 export class ListSlotsQuery {

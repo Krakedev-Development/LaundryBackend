@@ -374,6 +374,7 @@ model Facility {
   users    User[]
   drivers  Driver[]
   slots    TimeSlot[]
+  slotTemplates SlotTemplate[]
   orders   Order[]
   handoffs Handoff[]
 
@@ -571,6 +572,26 @@ model TimeSlot {
 
   @@unique([facilityId, context, date, startTime, endTime])
   @@index([date, context])
+}
+
+// Plantilla semanal de franjas: el servidor crea a partir de ella las franjas de los proximos
+// dias. Cambiarla o desactivarla no altera las franjas ya creadas ni sus reservas.
+model SlotTemplate {
+  id         String      @id @default(uuid()) @db.Uuid
+  facilityId String      @db.Uuid
+  facility   Facility    @relation(fields: [facilityId], references: [id])
+  context    SlotContext
+  // Dia de la semana: 0 = domingo ... 6 = sabado.
+  weekday    Int
+  startTime  String
+  endTime    String
+  capacity   Int
+  active     Boolean     @default(true)
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+
+  @@unique([facilityId, context, weekday, startTime, endTime])
+  @@index([active, weekday])
 }
 
 model SlotReservation {

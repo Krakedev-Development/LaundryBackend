@@ -170,6 +170,8 @@ export class OrdersService {
       };
     }
 
+    if (outbound.slot) this.assertDeliveryAfterPickup(pickupSlot, outbound.slot);
+
     // Catálogo y precios: siempre desde la base de datos.
     const lines = await this.priceLines(dto);
     const extras = dto.extraIds?.length
@@ -437,6 +439,8 @@ export class OrdersService {
     const policy = await this.policies.requireActive();
     const context = order.mode === 'HOME_HOME' ? 'DRIVER_DELIVERY' : 'FACILITY_PICKUP';
     const slot = await this.usableSlot(this.prisma, dto.slotId, context, order.facilityId, policy.timezone);
+    const inbound = order.legs.find((l) => l.kind === 'INBOUND');
+    if (inbound?.slot) this.assertDeliveryAfterPickup(inbound.slot, slot);
 
     let address: { fullAddress: string; latitude: Prisma.Decimal; longitude: Prisma.Decimal } | null = null;
     if (dto.addressId) {
@@ -785,6 +789,17 @@ export class OrdersService {
     if (slot.reservedCount >= slot.capacity)
       throw new ConflictException('La franja ya no tiene cupo disponible.');
     return slot;
+  }
+
+  // La entrega no puede empezar antes de que termine la franja de recogida.
+  private assertDeliveryAfterPickup(
+    pickup: Pick<TimeSlot, 'date' | 'endTime'>,
+    delivery: Pick<TimeSlot, 'date' | 'startTime'>,
+  ) {
+    if (`${ymd(delivery.date)} ${delivery.startTime}` < `${ymd(pickup.date)} ${pickup.endTime}`)
+      throw new UnprocessableEntityException(
+        'La franja de entrega debe empezar cuando termina la recogida o después.',
+      );
   }
 
   private isPastCutoff(slot: TimeSlot, cutoffMinutes: number, policy: BusinessPolicy) {

@@ -313,6 +313,91 @@ describe('programar entrega', () => {
   });
 });
 
+describe('franja de entrega al crear la solicitud', () => {
+  // Franja de entrega del día anterior a la recogida (las de este archivo son del 2099-06-15).
+  // Cada llamada usa una hora propia para no repetir la misma franja.
+  let early = 0;
+  const dayBefore = (context: 'DRIVER_DELIVERY' | 'FACILITY_PICKUP') => {
+    const hh = String(10 + early++).padStart(2, '0');
+    return t.prisma.timeSlot
+      .create({
+        data: {
+          facilityId, context, date: new Date('2099-06-14T00:00:00.000Z'),
+          startTime: `${hh}:00`, endTime: `${hh}:30`, capacity: 5,
+        },
+      })
+      .then((s) => s.id);
+  };
+
+  it('reserva la franja de entrega a domicilio junto con la de recogida', async () => {
+    const c = await newClient('out1@test.local');
+    const pickupSlotId = await slot('DRIVER_PICKUP');
+    const deliverySlotId = await slot('DRIVER_DELIVERY', 2);
+    const res = await createOrder(
+      c.token,
+      await body(c, { pickupSlotId, outbound: { slotId: deliverySlotId } }),
+    ).expect(201);
+    const out = res.body.legs.find((l: { kind: string }) => l.kind === 'OUTBOUND');
+    assert.equal(out.status, 'SCHEDULED');
+    assert.equal(out.slot.id, deliverySlotId);
+    const reserved = async (id: string) =>
+      (await t.prisma.timeSlot.findUniqueOrThrow({ where: { id } })).reservedCount;
+    assert.equal(await reserved(pickupSlotId), 1);
+    assert.equal(await reserved(deliverySlotId), 1);
+    assert.equal(
+      await t.prisma.slotReservation.count({ where: { slotId: deliverySlotId, active: true } }),
+      1,
+    );
+  });
+
+  it('reserva la franja de retiro en sede', async () => {
+    const c = await newClient('out2@test.local');
+    const pickupSlotId = await slot('DRIVER_PICKUP');
+    const storeSlotId = await slot('FACILITY_PICKUP');
+    const res = await createOrder(
+      c.token,
+      await body(c, { mode: 'HOME_STORE', pickupSlotId, outbound: { slotId: storeSlotId } }),
+    ).expect(201);
+    const out = res.body.legs.find((l: { kind: string }) => l.kind === 'OUTBOUND');
+    assert.equal(out.method, 'CUSTOMER');
+    assert.equal(out.status, 'SCHEDULED');
+    assert.equal(
+      (await t.prisma.timeSlot.findUniqueOrThrow({ where: { id: storeSlotId } })).reservedCount,
+      1,
+    );
+  });
+
+  it('rechaza una entrega anterior a la recogida sin reservar ningún cupo', async () => {
+    const c = await newClient('out3@test.local');
+    const pickupSlotId = await slot('DRIVER_PICKUP');
+    const early = await dayBefore('DRIVER_DELIVERY');
+    const res = await createOrder(
+      c.token,
+      await body(c, { pickupSlotId, outbound: { slotId: early } }),
+    ).expect(422);
+    assert.match(res.body.message, /entrega debe empezar cuando termina la recogida/);
+    const rows = await t.prisma.timeSlot.findMany({ where: { id: { in: [pickupSlotId, early] } } });
+    assert.deepEqual(rows.map((r) => r.reservedCount), [0, 0]);
+  });
+
+  it('rechaza la entrega si su franja ya está completa', async () => {
+    const c = await newClient('out4@test.local');
+    const full = await slot('DRIVER_DELIVERY', 1);
+    await t.prisma.timeSlot.update({ where: { id: full }, data: { reservedCount: 1 } });
+    await createOrder(c.token, await body(c, { outbound: { slotId: full } })).expect(409);
+  });
+
+  it('al programar la entrega después también exige que sea posterior a la recogida', async () => {
+    const c = await newClient('out5@test.local');
+    const o = await createOrder(c.token, await body(c)).expect(201);
+    await t.http
+      .put(`${api}/orders/${o.body.id}/outbound`)
+      .set(as(c.token))
+      .send({ expectedVersion: 1, slotId: await dayBefore('DRIVER_DELIVERY') })
+      .expect(422);
+  });
+});
+
 describe('flujo operativo y máquina de estados', () => {
   let c: Awaited<ReturnType<typeof newClient>>;
   let orderId: string;

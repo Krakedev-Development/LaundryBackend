@@ -32,9 +32,10 @@ export class SlotsService {
     const activePolicy = await this.policy.getActive();
     const timezone = activePolicy?.timezone ?? 'America/Guayaquil';
     const today = nowIn(timezone).date;
-    // Quien no es personal solo ve agenda futura, activa y con cupo.
+    // Quien no es personal solo ve agenda futura y activa. Por defecto, solo con cupo; con
+    // onlyAvailable=false también ve las completas (available: 0) para mostrarlas como tales.
     const from = staff ? q.from : q.from && q.from > today ? q.from : today;
-    const onlyAvailable = staff ? q.onlyAvailable === 'true' : true;
+    const onlyAvailable = staff ? q.onlyAvailable === 'true' : q.onlyAvailable !== 'false';
     const rows = await this.prisma.timeSlot.findMany({
       where: {
         facilityId: q.facilityId,

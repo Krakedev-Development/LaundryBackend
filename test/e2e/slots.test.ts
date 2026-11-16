@@ -140,6 +140,36 @@ describe('franjas', () => {
       .expect(200);
   });
 
+  it('el cliente puede pedir también las franjas completas, sin ver capacidad interna', async () => {
+    const full = await t.http
+      .post(`${api}/slots`)
+      .set(bearer(admin))
+      .send(slot({ startTime: '20:00', endTime: '21:00', capacity: 2 }))
+      .expect(201);
+    await t.prisma.timeSlot.update({ where: { id: full.body.id }, data: { reservedCount: 2 } });
+    const url = `${api}/slots?facilityId=${facilityId}&context=DRIVER_PICKUP`;
+    const byDefault = await t.http.get(url).set(bearer(client)).expect(200);
+    assert.equal(byDefault.body.some((s: { id: string }) => s.id === full.body.id), false);
+
+    const all = await t.http.get(`${url}&onlyAvailable=false`).set(bearer(client)).expect(200);
+    const row = all.body.find((s: { id: string }) => s.id === full.body.id);
+    assert.deepEqual(row, {
+      id: full.body.id,
+      facilityId,
+      context: 'DRIVER_PICKUP',
+      date: DAY,
+      startTime: '20:00',
+      endTime: '21:00',
+      available: 0,
+    });
+    // Las pasadas tampoco aparecen aunque el cliente lo pida.
+    const past = await t.http
+      .get(`${url}&onlyAvailable=false&from=2000-01-01&to=2000-12-31`)
+      .set(bearer(client))
+      .expect(200);
+    assert.deepEqual(past.body, []);
+  });
+
   it('una franja inactiva deja de ofrecerse al cliente', async () => {
     const created = await t.http
       .post(`${api}/slots`)
@@ -151,10 +181,12 @@ describe('franjas', () => {
       .set(bearer(admin))
       .send({ active: false })
       .expect(200);
-    const res = await t.http
-      .get(`${api}/slots?facilityId=${facilityId}&context=DRIVER_PICKUP`)
-      .set(bearer(client));
-    assert.equal(res.body.some((s: { id: string }) => s.id === created.body.id), false);
+    for (const q of ['', '&onlyAvailable=false']) {
+      const res = await t.http
+        .get(`${api}/slots?facilityId=${facilityId}&context=DRIVER_PICKUP${q}`)
+        .set(bearer(client));
+      assert.equal(res.body.some((s: { id: string }) => s.id === created.body.id), false);
+    }
   });
 });
 
