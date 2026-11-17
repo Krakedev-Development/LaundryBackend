@@ -26,7 +26,9 @@ import type {
   AssignDriverDto,
   CancelOrderDto,
   CreateOrderDto,
+  FailedPickupDto,
   ListOrdersQuery,
+  ScheduleInboundDto,
   ScheduleOutboundDto,
   TransitionDto,
 } from './dto/orders.dto';
@@ -343,7 +345,10 @@ export class OrdersService {
   async get(user: AuthUser, id: string) {
     const order = await this.loadOrder(id);
     this.assertCanView(user, order);
-    return this.view(order);
+    // Lo pagado y el saldo: la app muestra cuánto falta pagar (p. ej. tras un ajuste de precio).
+    const paid = await this.paidAmount(this.prisma, id);
+    const due = D.max(new D(order.total).sub(paid), 0);
+    return { ...this.view(order), amountPaid: paid.toString(), amountDue: due.toString() };
   }
 
   // ------------------------------------------------------------------ Transiciones
@@ -355,7 +360,7 @@ export class OrdersService {
     if (!TRANSITIONS.some((t) => t.to === dto.to))
       throw new BadRequestException('Estado destino desconocido.');
     const to = dto.to as OrderStatus;
-    const t = findTransition(order.status, to, order.mode);
+    const t = findTransition(order.status, to, order.mode, order.pricingModel);
     if (!t)
       throw new ConflictException(`No se permite pasar de ${order.status} a ${to}.`);
     if (!t.roles.includes(user.role))
@@ -480,7 +485,14 @@ export class OrdersService {
     const isClient = user.role === 'CLIENT';
     if (user.role === 'DRIVER') throw new ForbiddenException('Un chofer no cancela pedidos.');
     const allowed = isClient ? CLIENT_CANCELLABLE : STAFF_CANCELLABLE;
-    if (!allowed.includes(order.status))
+    // Retenido por recogida fallida: la ropa nunca salió del cliente, la sede puede cancelarlo.
+    const failedPickupHold =
+      !isClient &&
+      order.status === 'INCIDENT' &&
+      !!(await this.prisma.incident.findFirst({
+        where: { orderId: id, type: 'FAILED_PICKUP', status: { in: ['OPEN', 'IN_REVIEW'] } },
+      }));
+    if (!allowed.includes(order.status) && !failedPickupHold)
       throw new ConflictException(`Un pedido en ${order.status} ya no puede cancelarse.`);
 
     // Cancelación tardía del cliente: pasado el corte de la franja de recogida se genera cargo.
@@ -524,6 +536,11 @@ export class OrdersService {
         await this.slotReservationRelease(tx, r.id);
       }
       await tx.fulfillmentLeg.updateMany({ where: { orderId: id }, data: { status: 'CANCELLED' } });
+      if (failedPickupHold)
+        await tx.incident.updateMany({
+          where: { orderId: id, status: { in: ['OPEN', 'IN_REVIEW'] } },
+          data: { status: 'CLOSED', resolution: `Solicitud cancelada: ${dto.reason}` },
+        });
       if (lateFee)
         await tx.customerCharge.create({
           data: {
@@ -542,6 +559,167 @@ export class OrdersService {
       });
       if (!isClient)
         await this.notifications.orderStatus(tx, order, 'CANCELLED');
+      return this.view(await this.loadOrder(id, tx));
+    });
+  }
+
+  // ------------------------------------------------------------------ Recogida fallida
+
+  // El chofer está en el domicilio pero no puede recoger (cliente ausente, no responde...).
+  // La solicitud queda retenida (INCIDENT) para que la sede decida si la reprograma o la cancela;
+  // se libera la franja y al chofer, y se aplica el cargo de la política.
+  async failedPickup(user: AuthUser, id: string, dto: FailedPickupDto) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+    const inbound = order.legs.find((l) => l.kind === 'INBOUND')!;
+    if (user.role !== 'DRIVER' || inbound.driver?.userId !== user.id)
+      throw new ForbiddenException('El pedido no está asignado a ti.');
+    this.assertVersion(order, dto.expectedVersion);
+    if (order.status !== 'ARRIVED_FOR_PICKUP')
+      throw new ConflictException(
+        'La recogida fallida se reporta en el domicilio, después de marcar la llegada.',
+      );
+    const reason = dto.reason.trim();
+    if (!reason) throw new BadRequestException('Indica el motivo de la recogida fallida.');
+    const policy = await this.policies.requireActive();
+    const fee = new D(await this.policies.requireParam('failedPickupFee', policy));
+
+    return this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { id, version: order.version, status: order.status },
+        data: { status: 'INCIDENT', version: { increment: 1 } },
+      });
+      if (!count) throw new ConflictException('El pedido cambió; recárgalo e intenta de nuevo.');
+      const reservations = await tx.slotReservation.findMany({
+        where: { legId: inbound.id, active: true },
+      });
+      for (const r of reservations) {
+        await this.slots.releaseCapacity(tx, r.slotId);
+        await this.slotReservationRelease(tx, r.id);
+      }
+      // El tramo queda sin franja ni chofer: se programa de nuevo si la sede reprograma.
+      await tx.fulfillmentLeg.update({
+        where: { id: inbound.id },
+        data: { status: 'PENDING', driverId: null, slotId: null, scheduledDate: null, startedAt: null },
+      });
+      const driver = await tx.driver.findUnique({ where: { userId: user.id } });
+      await tx.incident.create({
+        data: {
+          orderId: id,
+          driverId: driver?.id,
+          type: 'FAILED_PICKUP',
+          severity: 'MEDIUM',
+          description: reason,
+          // Al resolverse, la solicitud vuelve a Confirmada para asignar una nueva recogida.
+          previousStatus: 'CONFIRMED',
+          createdById: user.id,
+        },
+      });
+      if (fee.gt(0))
+        await tx.customerCharge.create({
+          data: {
+            customerId: order.customerId,
+            orderId: id,
+            type: 'FAILED_PICKUP',
+            amount: fee,
+            reason: `Recogida fallida: ${reason}`,
+          },
+        });
+      await tx.orderEvent.create({
+        data: {
+          orderId: id, status: 'INCIDENT', title: 'Recogida fallida',
+          description: reason, actorId: user.id, actorRole: user.role,
+        },
+      });
+      await this.notifications.notify(tx, order.customerId, {
+        orderId: id,
+        category: 'INCIDENT',
+        title: 'No pudimos recoger tu ropa',
+        body: fee.gt(0)
+          ? `El chofer no pudo completar la recogida (${reason}). Se aplicó un cargo de $${fee.toFixed(2)}. La sede te contactará para reprogramarla.`
+          : `El chofer no pudo completar la recogida (${reason}). La sede te contactará para reprogramarla.`,
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id, actorRole: user.role, action: 'FAILED_PICKUP',
+          entity: 'Order', entityId: id, reason,
+        },
+      });
+      return this.view(await this.loadOrder(id, tx));
+    });
+  }
+
+  // La sede programa una nueva franja de recogida. Si la entrega ya programada quedaría antes
+  // que la nueva recogida, se libera para reprogramarla.
+  async scheduleInbound(user: AuthUser, id: string, dto: ScheduleInboundDto) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+    if (user.role !== 'ADMIN' && user.role !== 'SUPERVISOR')
+      throw new ForbiddenException('Solo la sede reprograma la recogida.');
+    this.assertVersion(order, dto.expectedVersion);
+    if (order.status !== 'INCIDENT' && order.status !== 'CONFIRMED')
+      throw new ConflictException(
+        'La recogida se reprograma con el pedido retenido o confirmado.',
+      );
+    const inbound = order.legs.find((l) => l.kind === 'INBOUND')!;
+    if (inbound.slotId)
+      throw new ConflictException('La recogida ya tiene una franja programada.');
+    const policy = await this.policies.requireActive();
+    const slot = await this.usableSlot(this.prisma, dto.slotId, 'DRIVER_PICKUP', order.facilityId, policy.timezone);
+    const outbound = order.legs.find((l) => l.kind === 'OUTBOUND');
+    const deliveryTooEarly =
+      !!outbound?.slot &&
+      `${ymd(outbound.slot.date)} ${outbound.slot.startTime}` < `${ymd(slot.date)} ${slot.endTime}`;
+
+    return this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { id, version: order.version, status: order.status },
+        data: { version: { increment: 1 } },
+      });
+      if (!count) throw new ConflictException('El pedido cambió; recárgalo e intenta de nuevo.');
+      await this.slots.reserveCapacity(tx, slot.id);
+      await tx.slotReservation.create({ data: { slotId: slot.id, legId: inbound.id } });
+      await tx.fulfillmentLeg.update({
+        where: { id: inbound.id },
+        data: { slotId: slot.id, scheduledDate: slot.date, status: 'SCHEDULED' },
+      });
+      if (deliveryTooEarly && outbound) {
+        const reservations = await tx.slotReservation.findMany({
+          where: { legId: outbound.id, active: true },
+        });
+        for (const r of reservations) {
+          await this.slots.releaseCapacity(tx, r.slotId);
+          await this.slotReservationRelease(tx, r.id);
+        }
+        await tx.fulfillmentLeg.update({
+          where: { id: outbound.id },
+          data: { slotId: null, scheduledDate: null, status: 'PENDING' },
+        });
+      }
+      const when = `${ymd(slot.date)} ${slot.startTime}-${slot.endTime}`;
+      await tx.orderEvent.create({
+        data: {
+          orderId: id, status: order.status, title: 'Recogida reprogramada',
+          description: deliveryTooEarly
+            ? `Nueva recogida: ${when}. La entrega debe programarse de nuevo.`
+            : `Nueva recogida: ${when}.`,
+          actorId: user.id, actorRole: user.role,
+        },
+      });
+      await this.notifications.notify(tx, order.customerId, {
+        orderId: id,
+        category: 'ORDER_STATUS',
+        title: 'Recogida reprogramada',
+        body: deliveryTooEarly
+          ? `Programamos una nueva recogida para el ${when}. Elige de nuevo el horario de entrega.`
+          : `Programamos una nueva recogida para el ${when}.`,
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id, actorRole: user.role, action: 'INBOUND_RESCHEDULED',
+          entity: 'Order', entityId: id, reason: when,
+        },
+      });
       return this.view(await this.loadOrder(id, tx));
     });
   }
@@ -612,13 +790,17 @@ export class OrdersService {
     if (user.role !== 'ADMIN' && user.role !== 'SUPERVISOR')
       throw new ForbiddenException('Solo el personal confirma pagos manuales.');
     this.assertVersion(order, dto.expectedVersion);
-    if (order.status !== 'PAYMENT_PENDING')
-      throw new ConflictException('Solo se confirma el pago de un pedido pendiente de pago.');
+    // Pago inicial pendiente, o diferencia por un precio final mayor (pago por transferencia).
+    const difference = order.status !== 'PAYMENT_PENDING';
+    if (difference && (order.paymentStatus !== 'PENDING' || ['CANCELLED', 'COMPLETED'].includes(order.status)))
+      throw new ConflictException('El pedido no tiene un pago pendiente por confirmar.');
 
     const note = dto.note?.trim() || 'Pago confirmado por administración';
     return this.prisma.$transaction(async (tx) => {
       await this.wallet.lockCustomer(tx, order.customerId);
       const outstanding = new D(order.total).sub(await this.paidAmount(tx, id));
+      if (difference && outstanding.lte(0))
+        throw new ConflictException('El pedido no tiene saldo pendiente.');
       if (outstanding.gt(0)) {
         await this.wallet.post(tx, {
           customerId: order.customerId,
@@ -627,7 +809,8 @@ export class OrdersService {
           amount: outstanding,
           reference: `ORDER:${order.number}:MANUAL_PAYMENT`,
           description: note,
-          idempotencyKey: `order-manual-credit:${id}`,
+          // Por versión: el pago inicial y una diferencia posterior son abonos distintos.
+          idempotencyKey: `order-manual-credit:${id}:v${order.version}`,
         });
         await this.wallet.post(tx, {
           customerId: order.customerId,
@@ -639,7 +822,8 @@ export class OrdersService {
           idempotencyKey: `order-payment:${id}:v${order.version}`,
         });
       }
-      await this.applyTransition(tx, order, 'CONFIRMED', user, note);
+      if (difference) await this.bump(tx, order, user, `Pago de diferencia confirmado: ${note}`);
+      else await this.applyTransition(tx, order, 'CONFIRMED', user, note);
       await tx.order.update({
         where: { id },
         data: { paymentStatus: 'PAID', paymentMethodKind: 'TRANSFER' },
@@ -693,12 +877,18 @@ export class OrdersService {
   // por la restricción de puerta, pero sí validando que la transición exista y la versión coincida.
   async applyTransition(
     tx: Tx,
-    order: { id: string; version: number; status: OrderStatus; mode: FullOrder['mode'] },
+    order: {
+      id: string;
+      version: number;
+      status: OrderStatus;
+      mode: FullOrder['mode'];
+      pricingModel?: FullOrder['pricingModel'];
+    },
     to: OrderStatus,
     actor: AuthUser,
     note?: string,
   ) {
-    if (!findTransition(order.status, to, order.mode))
+    if (!findTransition(order.status, to, order.mode, order.pricingModel))
       throw new ConflictException(`No se permite pasar de ${order.status} a ${to}.`);
     const { count } = await tx.order.updateMany({
       where: { id: order.id, version: order.version, status: order.status },

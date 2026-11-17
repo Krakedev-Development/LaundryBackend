@@ -20,7 +20,9 @@ import {
   CancelOrderDto,
   ConfirmPaymentDto,
   CreateOrderDto,
+  FailedPickupDto,
   ListOrdersQuery,
+  ScheduleInboundDto,
   ScheduleOutboundDto,
   TransitionDto,
   VersionedDto,
@@ -80,6 +82,28 @@ export class OrdersController {
     @Body() dto: AssignDriverDto,
   ) {
     return this.orders.assign(user, id, dto);
+  }
+
+  // El chofer, en el domicilio, no pudo recoger: la solicitud queda retenida para la sede.
+  @Roles('DRIVER')
+  @Post(':id/failed-pickup')
+  failedPickup(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: FailedPickupDto,
+  ) {
+    return this.orders.failedPickup(user, id, dto);
+  }
+
+  // La sede programa una nueva franja de recogida (p. ej. tras una recogida fallida).
+  @Roles('ADMIN', 'SUPERVISOR')
+  @Put(':id/inbound')
+  scheduleInbound(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ScheduleInboundDto,
+  ) {
+    return this.orders.scheduleInbound(user, id, dto);
   }
 
   @Roles('CLIENT')

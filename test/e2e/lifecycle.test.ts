@@ -106,16 +106,13 @@ describe('ciclo completo: recogida a domicilio, proceso y entrega a domicilio', 
     assert.equal(inbound.status, 'COMPLETED');
   });
 
-  it('pesaje, ajuste con aprobación del cliente y precio final', async () => {
-    await move(w.supervisor, id, 'WEIGHING').expect(201);
-    // Un cliente no pesa.
-    await post(c.token, `/orders/${id}/weight`, { weightGrams: 3000, expectedVersion: await w.version(id) }).expect(403);
-    const weighed = await post(w.supervisor, `/orders/${id}/weight`, {
-      weightGrams: 3000, expectedVersion: await w.version(id),
-    }).expect(201);
-    assert.equal(weighed.body.status, 'INSPECTION');
-    // Precio fijo: el peso no cambia el total.
-    assert.equal(weighed.body.total, '15.4');
+  it('por prenda no se pesa: inspección, ajuste con aprobación del cliente y precio final', async () => {
+    // Solo el servicio por peso pasa por el pesaje; por prenda va directo a la inspección.
+    await move(w.supervisor, id, 'WEIGHING').expect(409);
+    const inspected = await move(w.supervisor, id, 'INSPECTION').expect(201);
+    assert.equal(inspected.body.status, 'INSPECTION');
+    // Precio fijo: sin pesaje el total no cambia.
+    assert.equal(inspected.body.total, '15.4');
     await post(w.supervisor, `/orders/${id}/weight`, { weightGrams: 3000, expectedVersion: await w.version(id) }).expect(409);
 
     await move(w.supervisor, id, 'PRICING_PENDING').expect(201);
@@ -358,5 +355,69 @@ describe('pedidos por peso', () => {
     assert.equal(decided.body.requiresStaffReview, true);
     const final = await post(w.supervisor, `/orders/${id}/pricing/resolve`, { expectedVersion: await w.version(id) }).expect(201);
     assert.equal(final.body.total, '22');
+  });
+});
+
+describe('pesaje solo para el servicio por peso y pago de la diferencia', () => {
+  // Pedido por peso pagado y ya en planta.
+  async function atFacility(email: string) {
+    const c = await w.newClient(email);
+    await w.credit(c.customerId, 100);
+    const id = await w.order(c, { items: undefined, weightTierId: w.weightTierId });
+    await post(c.token, `/orders/${id}/pay`, { expectedVersion: 1 }).expect(201);
+    await t.prisma.order.update({ where: { id }, data: { status: 'AT_FACILITY' } });
+    return { c, id };
+  }
+  // Pesa más de lo estimado, el cliente aprueba y queda saldo por pagar (27.34 - 22 = 5.34).
+  async function withDifference(email: string) {
+    const { c, id } = await atFacility(email);
+    await move(w.supervisor, id, 'WEIGHING').expect(201);
+    await post(w.supervisor, `/orders/${id}/weight`, { weightGrams: 6000, expectedVersion: await w.version(id) }).expect(201);
+    await move(w.supervisor, id, 'PRICING_PENDING').expect(201);
+    await post(w.supervisor, `/orders/${id}/pricing/resolve`, { expectedVersion: await w.version(id) }).expect(201);
+    const adj = (await get(c.token, `/orders/${id}/adjustments`)).body[0];
+    await post(c.token, `/orders/${id}/adjustments/${adj.id}/decision`, {
+      approve: true, expectedVersion: await w.version(id),
+    }).expect(201);
+    await post(w.supervisor, `/orders/${id}/pricing/resolve`, { expectedVersion: await w.version(id) }).expect(201);
+    return { c, id };
+  }
+
+  it('el servicio por peso no se salta el pesaje', async () => {
+    const { id } = await atFacility('pw-skip@test.local');
+    await move(w.supervisor, id, 'INSPECTION').expect(409);
+    await move(w.supervisor, id, 'WEIGHING').expect(201);
+  });
+
+  it('el detalle informa lo pagado y el saldo pendiente', async () => {
+    const { c, id } = await withDifference('pw-due@test.local');
+    const detail = await get(c.token, `/orders/${id}`).expect(200);
+    assert.deepEqual(
+      [detail.body.total, detail.body.amountPaid, detail.body.amountDue, detail.body.paymentStatus],
+      ['27.34', '22', '5.34', 'PENDING'],
+    );
+  });
+
+  it('el cliente paga la diferencia con su billetera', async () => {
+    const { c, id } = await withDifference('pw-wallet@test.local');
+    const paid = await post(c.token, `/orders/${id}/pay`, { expectedVersion: await w.version(id) }).expect(201);
+    assert.equal(paid.body.paymentStatus, 'PAID');
+    assert.equal(paid.body.status, 'IN_PROCESS');
+    assert.equal((await get(c.token, `/orders/${id}`)).body.amountDue, '0');
+    // 100 - 22 - 5.34
+    assert.equal((await get(c.token, '/wallet')).body.balance, '72.66');
+  });
+
+  it('la sede confirma la diferencia pagada por transferencia sin cambiar el estado', async () => {
+    const { c, id } = await withDifference('pw-transfer@test.local');
+    const res = await post(w.supervisor, `/orders/${id}/confirm-payment`, {
+      expectedVersion: await w.version(id), note: 'Transferencia 0042',
+    }).expect(201);
+    assert.deepEqual([res.body.status, res.body.paymentStatus], ['IN_PROCESS', 'PAID']);
+    assert.equal((await get(c.token, `/orders/${id}`)).body.amountDue, '0');
+    // La billetera no cambia: el dinero entró por fuera.
+    assert.equal((await get(c.token, '/wallet')).body.balance, '78');
+    // Sin saldo pendiente ya no hay nada que confirmar.
+    await post(w.supervisor, `/orders/${id}/confirm-payment`, { expectedVersion: await w.version(id) }).expect(409);
   });
 });
