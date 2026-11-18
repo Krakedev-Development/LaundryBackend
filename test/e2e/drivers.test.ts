@@ -75,6 +75,15 @@ describe('telemetría del chofer', () => {
     assert.equal(res.body.longitude, 5.654321);
     assert.equal(res.body.status, 'ON_SERVICE');
     assert.ok(res.body.locationAt);
+
+    // Sin GPS el chofer puede cambiar su estado sin inventar una ubicación: la última conocida
+    // se conserva y no se marca como reciente.
+    const statusOnly = await patch(w.driverToken, '/drivers/me/location', { status: 'BREAK' }).expect(200);
+    assert.equal(statusOnly.body.status, 'BREAK');
+    assert.equal(statusOnly.body.latitude, 5.123456);
+    assert.equal(statusOnly.body.locationAt, res.body.locationAt);
+    await patch(w.driverToken, '/drivers/me/location', { latitude: 5 }).expect(400);
+    await patch(w.driverToken, '/drivers/me/location', {}).expect(400);
   });
 
   it('una cuenta de chofer sin perfil recibe 404', async () => {

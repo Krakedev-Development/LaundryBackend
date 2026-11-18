@@ -24,8 +24,10 @@ export class UpdateDriverDto {
   @IsOptional() @IsIn(DRIVER_STATUSES) status?: DriverStatusValue;
 }
 
+// Ubicación real del dispositivo y/o estado. Sin coordenadas (p. ej. GPS desactivado) solo se
+// actualiza el estado: la última ubicación conocida no se marca como reciente.
 export class UpdateLocationDto {
-  @IsNumber() @IsLatitude() latitude: number;
-  @IsNumber() @IsLongitude() longitude: number;
+  @IsOptional() @IsNumber() @IsLatitude() latitude?: number;
+  @IsOptional() @IsNumber() @IsLongitude() longitude?: number;
   @IsOptional() @IsIn(DRIVER_STATUSES) status?: DriverStatusValue;
 }

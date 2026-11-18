@@ -66,6 +66,16 @@ export class ScheduleOutboundDto extends VersionedDto {
   @IsOptional() @IsUUID() addressId?: string;
 }
 
+// El chofer no pudo recoger (cliente ausente, no responde...): el motivo es obligatorio.
+export class FailedPickupDto extends VersionedDto {
+  @IsString() @IsNotEmpty() @MaxLength(300) reason: string;
+}
+
+// La sede asigna una nueva franja de recogida (p. ej. tras una recogida fallida).
+export class ScheduleInboundDto extends VersionedDto {
+  @IsUUID() slotId: string;
+}
+
 export class TransitionDto extends VersionedDto {
   @IsString() @IsNotEmpty() to: string;
   @IsOptional() @IsString() @MaxLength(300) note?: string;

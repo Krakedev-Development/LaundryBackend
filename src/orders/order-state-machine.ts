@@ -1,6 +1,7 @@
 import type {
   FulfillmentMode,
   OrderStatus,
+  PricingModel,
   UserRole,
 } from '../generated/prisma/client';
 
@@ -23,6 +24,8 @@ export interface Transition {
   gate: Gate;
   // Solo aplica a ese modo de entrega.
   mode?: FulfillmentMode;
+  // Solo aplica a ese modelo de precio.
+  pricing?: PricingModel;
 }
 
 const STAFF: UserRole[] = ['ADMIN', 'SUPERVISOR'];
@@ -35,7 +38,10 @@ export const TRANSITIONS: readonly Transition[] = [
   { from: 'ARRIVED_FOR_PICKUP', to: 'PICKED_UP', roles: ['DRIVER'], gate: 'HANDOFF' },
   { from: 'PICKED_UP', to: 'HEADING_TO_FACILITY', roles: ['DRIVER'], gate: 'NONE' },
   { from: 'HEADING_TO_FACILITY', to: 'AT_FACILITY', roles: STAFF, gate: 'HANDOFF' },
-  { from: 'AT_FACILITY', to: 'WEIGHING', roles: STAFF, gate: 'NONE' },
+  // Solo el servicio por peso se pesa: el precio final depende del peso real. Por prenda se
+  // pasa directo a la inspección.
+  { from: 'AT_FACILITY', to: 'WEIGHING', roles: STAFF, gate: 'NONE', pricing: 'PER_WEIGHT' },
+  { from: 'AT_FACILITY', to: 'INSPECTION', roles: STAFF, gate: 'NONE', pricing: 'FIXED' },
   { from: 'WEIGHING', to: 'INSPECTION', roles: STAFF, gate: 'WEIGHING' },
   { from: 'INSPECTION', to: 'PRICING_PENDING', roles: STAFF, gate: 'NONE' },
   { from: 'PRICING_PENDING', to: 'CUSTOMER_APPROVAL_PENDING', roles: STAFF, gate: 'ADJUSTMENT' },
@@ -58,9 +64,14 @@ export function findTransition(
   from: OrderStatus,
   to: OrderStatus,
   mode: FulfillmentMode,
+  pricing?: PricingModel,
 ): Transition | undefined {
   return TRANSITIONS.find(
-    (t) => t.from === from && t.to === to && (!t.mode || t.mode === mode),
+    (t) =>
+      t.from === from &&
+      t.to === to &&
+      (!t.mode || t.mode === mode) &&
+      (!t.pricing || !pricing || t.pricing === pricing),
   );
 }
 

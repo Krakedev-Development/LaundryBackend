@@ -11,6 +11,8 @@ function useTestEnvironment(): void {
   if (!url.pathname.endsWith('_test')) url.pathname += '_test';
   process.env.DATABASE_URL = url.toString();
   process.env.PORT = '4999';
+  // Las pruebas llaman a la generación de la agenda directamente, sin temporizador.
+  process.env.SLOT_AUTOGEN = 'off';
   process.env.THROTTLE_LIMIT = '100000';
   process.env.THROTTLE_TTL_SECONDS = '60';
   process.env.AUTH_THROTTLE_LIMIT = '100000';

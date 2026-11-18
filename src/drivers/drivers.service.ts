@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -95,13 +96,19 @@ export class DriversService {
   }
 
   async updateLocation(user: AuthUser, dto: UpdateLocationDto) {
+    const hasLat = dto.latitude !== undefined;
+    const hasLng = dto.longitude !== undefined;
+    if (hasLat !== hasLng)
+      throw new BadRequestException('Envía latitud y longitud juntas.');
+    if (!hasLat && !dto.status)
+      throw new BadRequestException('Envía la ubicación, el estado o ambos.');
     const own = await this.ownProfile(user);
     const driver = await this.prisma.driver.update({
       where: { id: own.id },
       data: {
-        latitude: dto.latitude,
-        longitude: dto.longitude,
-        locationAt: new Date(),
+        ...(hasLat
+          ? { latitude: dto.latitude, longitude: dto.longitude, locationAt: new Date() }
+          : {}),
         status: dto.status,
       },
       include: DRIVER_INCLUDE,
