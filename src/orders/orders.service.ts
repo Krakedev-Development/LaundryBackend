@@ -32,6 +32,7 @@ import type {
   ScheduleOutboundDto,
   TransitionDto,
 } from './dto/orders.dto';
+import { $Enums } from '../generated/prisma/client';
 import {
   CLIENT_CANCELLABLE,
   findTransition,
@@ -1050,10 +1051,11 @@ export class OrdersService {
     return (!p.validFrom || p.validFrom <= now) && (!p.validUntil || p.validUntil >= now);
   }
 
+  // Todos los estados del modelo, también los que no salen de una transición (INCIDENT,
+  // CANCELLED): la sede necesita listar los pedidos retenidos.
   private parseStatus(s: string): OrderStatus {
-    const known = new Set<string>(TRANSITIONS.flatMap((t) => [t.from, t.to]));
-    known.add('CANCELLED');
-    if (!known.has(s)) throw new BadRequestException('Estado desconocido.');
+    if (!(Object.values($Enums.OrderStatus) as string[]).includes(s))
+      throw new BadRequestException('Estado desconocido.');
     return s as OrderStatus;
   }
 
