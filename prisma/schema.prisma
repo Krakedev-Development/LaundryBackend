@@ -225,8 +225,8 @@ model User {
   createdAt    DateTime   @default(now())
   updatedAt    DateTime   @updatedAt
 
-  customer      Customer?
-  driver        Driver?
+  customer           Customer?
+  driver             Driver?
   refreshTokens      RefreshToken[]
   passwordResetCodes PasswordResetCode[]
   auditLogs          AuditLog[]
@@ -264,26 +264,26 @@ model PasswordResetCode {
 }
 
 model Customer {
-  id                 String    @id @default(uuid()) @db.Uuid
-  userId             String    @unique @db.Uuid
-  user               User      @relation(fields: [userId], references: [id])
-  kycStatus          KycStatus @default(NOT_SUBMITTED)
+  id                 String          @id @default(uuid()) @db.Uuid
+  userId             String          @unique @db.Uuid
+  user               User            @relation(fields: [userId], references: [id])
+  kycStatus          KycStatus       @default(NOT_SUBMITTED)
   kycRejectionReason String?
   kycDocumentType    String?
   kycDocumentNumber  String?
   // Numero de envios de verificacion ya realizados (el primero y sus reenvios).
-  kycSubmissions     Int       @default(0)
-  kycReviewedById    String?   @db.Uuid
+  kycSubmissions     Int             @default(0)
+  kycReviewedById    String?         @db.Uuid
   kycReviewedAt      DateTime?
-  membershipPlanId   String?   @db.Uuid
+  membershipPlanId   String?         @db.Uuid
   membershipPlan     MembershipPlan? @relation(fields: [membershipPlanId], references: [id])
   billingName        String?
   billingTaxId       String?
   billingEmail       String?
   billingPhone       String?
   billingAddress     String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
 
   kycDocuments   KycDocument[]
   addresses      Address[]
@@ -299,39 +299,39 @@ model Customer {
 }
 
 model Address {
-  id         String   @id @default(uuid()) @db.Uuid
-  customerId String   @db.Uuid
-  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  title      String
+  id          String    @id @default(uuid()) @db.Uuid
+  customerId  String    @db.Uuid
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  title       String
   fullAddress String
-  reference  String?
-  isPrimary  Boolean  @default(false)
-  latitude   Decimal  @db.Decimal(9, 6)
-  longitude  Decimal  @db.Decimal(9, 6)
-  deletedAt  DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  reference   String?
+  isPrimary   Boolean   @default(false)
+  latitude    Decimal   @db.Decimal(9, 6)
+  longitude   Decimal   @db.Decimal(9, 6)
+  deletedAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 
   @@index([customerId])
 }
 
 model Driver {
-  id               String       @id @default(uuid()) @db.Uuid
-  userId           String       @unique @db.Uuid
-  user             User         @relation(fields: [userId], references: [id])
-  facilityId       String       @db.Uuid
-  facility         Facility     @relation(fields: [facilityId], references: [id])
-  status           DriverStatus @default(OFFLINE)
-  vehicle          String?
-  plate            String?
-  latitude         Decimal?     @db.Decimal(9, 6)
-  longitude        Decimal?     @db.Decimal(9, 6)
-  locationAt       DateTime?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @unique @db.Uuid
+  user       User         @relation(fields: [userId], references: [id])
+  facilityId String       @db.Uuid
+  facility   Facility     @relation(fields: [facilityId], references: [id])
+  status     DriverStatus @default(OFFLINE)
+  vehicle    String?
+  plate      String?
+  latitude   Decimal?     @db.Decimal(9, 6)
+  longitude  Decimal?     @db.Decimal(9, 6)
+  locationAt DateTime?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
 
-  zones   DriverZone[]
-  legs    FulfillmentLeg[]
+  zones     DriverZone[]
+  legs      FulfillmentLeg[]
   incidents Incident[]
 
   @@index([facilityId, status])
@@ -353,30 +353,30 @@ model Zone {
 }
 
 model Facility {
-  id           String   @id @default(uuid()) @db.Uuid
-  zoneId       String   @db.Uuid
-  zone         Zone     @relation(fields: [zoneId], references: [id])
-  name         String
-  address      String
-  city         String?
-  taxId        String?
-  phone        String?
-  managerName  String?
-  openingHours Json?
-  latitude     Decimal  @db.Decimal(9, 6)
-  longitude    Decimal  @db.Decimal(9, 6)
+  id            String   @id @default(uuid()) @db.Uuid
+  zoneId        String   @db.Uuid
+  zone          Zone     @relation(fields: [zoneId], references: [id])
+  name          String
+  address       String
+  city          String?
+  taxId         String?
+  phone         String?
+  managerName   String?
+  openingHours  Json?
+  latitude      Decimal  @db.Decimal(9, 6)
+  longitude     Decimal  @db.Decimal(9, 6)
   // Capacidad de recepcion diaria; sin valor por defecto.
   dailyCapacity Int?
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  users    User[]
-  drivers  Driver[]
-  slots    TimeSlot[]
+  users         User[]
+  drivers       Driver[]
+  slots         TimeSlot[]
   slotTemplates SlotTemplate[]
-  orders   Order[]
-  handoffs Handoff[]
+  orders        Order[]
+  handoffs      Handoff[]
 
   @@index([zoneId])
 }
@@ -396,34 +396,34 @@ model DriverZone {
 // "no configurado": las reglas que dependen de ellos se rechazan hasta que el administrador
 // los defina, en lugar de asumir un valor.
 model BusinessPolicy {
-  id        String   @id @default(uuid()) @db.Uuid
-  version   Int      @unique
-  active    Boolean  @default(false)
-  timezone  String
+  id       String  @id @default(uuid()) @db.Uuid
+  version  Int     @unique
+  active   Boolean @default(false)
+  timezone String
 
-  minimumOrderAmount Decimal? @db.Decimal(12, 2)
-  taxRate            Decimal? @db.Decimal(6, 4)
-  taxIncluded        Boolean?
-  pickupFee          Decimal? @db.Decimal(12, 2)
-  deliveryFee        Decimal? @db.Decimal(12, 2)
-  pricePerPound      Decimal? @db.Decimal(12, 4)
+  minimumOrderAmount      Decimal? @db.Decimal(12, 2)
+  taxRate                 Decimal? @db.Decimal(6, 4)
+  taxIncluded             Boolean?
+  pickupFee               Decimal? @db.Decimal(12, 2)
+  deliveryFee             Decimal? @db.Decimal(12, 2)
+  pricePerPound           Decimal? @db.Decimal(12, 4)
   // Minutos antes de la franja a partir de los cuales ya no se permite cambiar o cancelar sin cargo.
-  cutoffMinutes      Int?
-  lateCancellationFee Decimal? @db.Decimal(12, 2)
-  noShowFee          Decimal? @db.Decimal(12, 2)
-  failedPickupFee    Decimal? @db.Decimal(12, 2)
-  blockNewOrdersOnCharges Boolean @default(false)
-  enforceDriverLimit Boolean  @default(false)
-  driverLimit        Int?
-  driverMayReorder   Boolean  @default(false)
-  requireStorePickupSlot Boolean @default(false)
+  cutoffMinutes           Int?
+  lateCancellationFee     Decimal? @db.Decimal(12, 2)
+  noShowFee               Decimal? @db.Decimal(12, 2)
+  failedPickupFee         Decimal? @db.Decimal(12, 2)
+  blockNewOrdersOnCharges Boolean  @default(false)
+  enforceDriverLimit      Boolean  @default(false)
+  driverLimit             Int?
+  driverMayReorder        Boolean  @default(false)
+  requireStorePickupSlot  Boolean  @default(false)
   // Reenvios de la verificacion permitidos tras un rechazo (ademas del primer envio).
-  kycMaxResubmissions Int @default(3)
-  handoffMaxAttempts Int?
-  handoffTtlMinutes  Int?
-  pointsPerCurrencyUnit Decimal? @db.Decimal(8, 2)
-  walletTopUpMin     Decimal? @db.Decimal(12, 2)
-  walletTopUpMax     Decimal? @db.Decimal(12, 2)
+  kycMaxResubmissions     Int      @default(3)
+  handoffMaxAttempts      Int?
+  handoffTtlMinutes       Int?
+  pointsPerCurrencyUnit   Decimal? @db.Decimal(8, 2)
+  walletTopUpMin          Decimal? @db.Decimal(12, 2)
+  walletTopUpMax          Decimal? @db.Decimal(12, 2)
 
   createdById String?  @db.Uuid
   reason      String?
@@ -433,17 +433,17 @@ model BusinessPolicy {
 }
 
 model KycDocument {
-  id          String          @id @default(uuid()) @db.Uuid
-  customerId  String          @db.Uuid
-  customer    Customer        @relation(fields: [customerId], references: [id])
+  id         String          @id @default(uuid()) @db.Uuid
+  customerId String          @db.Uuid
+  customer   Customer        @relation(fields: [customerId], references: [id])
   // Numero de envio al que pertenece (kycSubmissions + 1 mientras es borrador).
-  submission  Int
-  type        KycDocumentType
-  mimeType    String
-  sizeBytes   Int
-  sha256      String
-  data        Bytes
-  createdAt   DateTime        @default(now())
+  submission Int
+  type       KycDocumentType
+  mimeType   String
+  sizeBytes  Int
+  sha256     String
+  data       Bytes
+  createdAt  DateTime        @default(now())
 
   @@unique([customerId, submission, type])
 }
@@ -461,12 +461,16 @@ model GarmentType {
 }
 
 model ServiceType {
-  id         String   @id @default(uuid()) @db.Uuid
-  name       String   @unique
-  extraPrice Decimal  @db.Decimal(12, 2)
-  active     Boolean  @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String   @unique
+  // Lo que incluye el servicio, visible para el cliente al elegirlo.
+  description    String?
+  extraPrice     Decimal  @db.Decimal(12, 2)
+  // Tiempo estimado de entrega del servicio, en horas.
+  estimatedHours Int?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   items OrderItem[]
 }
@@ -595,13 +599,13 @@ model SlotTemplate {
 }
 
 model SlotReservation {
-  id        String          @id @default(uuid()) @db.Uuid
-  slotId    String          @db.Uuid
-  slot      TimeSlot        @relation(fields: [slotId], references: [id])
-  legId     String          @db.Uuid
-  leg       FulfillmentLeg  @relation(fields: [legId], references: [id])
-  active    Boolean         @default(true)
-  createdAt DateTime        @default(now())
+  id         String         @id @default(uuid()) @db.Uuid
+  slotId     String         @db.Uuid
+  slot       TimeSlot       @relation(fields: [slotId], references: [id])
+  legId      String         @db.Uuid
+  leg        FulfillmentLeg @relation(fields: [legId], references: [id])
+  active     Boolean        @default(true)
+  createdAt  DateTime       @default(now())
   releasedAt DateTime?
 
   @@index([slotId, active])
@@ -611,56 +615,56 @@ model SlotReservation {
 // ---------------------------------------------------------------- Pedido
 
 model Order {
-  id          String      @id @default(uuid()) @db.Uuid
+  id         String          @id @default(uuid()) @db.Uuid
   // Numero legible y secuencial para el usuario (SOL-xxxx se arma en la capa de presentacion).
-  number      Int         @unique @default(autoincrement())
-  customerId  String      @db.Uuid
-  customer    Customer    @relation(fields: [customerId], references: [id])
-  facilityId  String      @db.Uuid
-  facility    Facility    @relation(fields: [facilityId], references: [id])
-  mode        FulfillmentMode
-  status      OrderStatus @default(CONFIRMED)
-  priority    Boolean     @default(false)
-  notes       String?
+  number     Int             @unique @default(autoincrement())
+  customerId String          @db.Uuid
+  customer   Customer        @relation(fields: [customerId], references: [id])
+  facilityId String          @db.Uuid
+  facility   Facility        @relation(fields: [facilityId], references: [id])
+  mode       FulfillmentMode
+  status     OrderStatus     @default(CONFIRMED)
+  priority   Boolean         @default(false)
+  notes      String?
 
-  pricingModel     PricingModel
-  pricingStatus    PricingStatus
-  paymentStatus    PaymentStatus
-  paymentMethodKind PaymentMethodKind?
-  estimatedWeightLb Decimal? @db.Decimal(10, 2)
+  pricingModel       PricingModel
+  pricingStatus      PricingStatus
+  paymentStatus      PaymentStatus
+  paymentMethodKind  PaymentMethodKind?
+  estimatedWeightLb  Decimal?           @db.Decimal(10, 2)
   // Precio por libra del rango elegido, congelado al crear: cambios posteriores no lo afectan.
-  pricePerPound     Decimal? @db.Decimal(12, 4)
-  weightTierId      String?  @db.Uuid
-  weightTier        WeightTier? @relation(fields: [weightTierId], references: [id])
-  itemsSubtotal     Decimal  @default(0) @db.Decimal(12, 2)
-  extrasTotal       Decimal  @default(0) @db.Decimal(12, 2)
-  discount          Decimal  @default(0) @db.Decimal(12, 2)
-  membershipDiscount Decimal @default(0) @db.Decimal(12, 2)
-  logisticsFee      Decimal  @default(0) @db.Decimal(12, 2)
-  tax               Decimal  @default(0) @db.Decimal(12, 2)
-  total             Decimal  @default(0) @db.Decimal(12, 2)
-  policyVersion     Int
+  pricePerPound      Decimal?           @db.Decimal(12, 4)
+  weightTierId       String?            @db.Uuid
+  weightTier         WeightTier?        @relation(fields: [weightTierId], references: [id])
+  itemsSubtotal      Decimal            @default(0) @db.Decimal(12, 2)
+  extrasTotal        Decimal            @default(0) @db.Decimal(12, 2)
+  discount           Decimal            @default(0) @db.Decimal(12, 2)
+  membershipDiscount Decimal            @default(0) @db.Decimal(12, 2)
+  logisticsFee       Decimal            @default(0) @db.Decimal(12, 2)
+  tax                Decimal            @default(0) @db.Decimal(12, 2)
+  total              Decimal            @default(0) @db.Decimal(12, 2)
+  policyVersion      Int
 
-  promotionId String?   @db.Uuid
+  promotionId String?    @db.Uuid
   promotion   Promotion? @relation(fields: [promotionId], references: [id])
 
   // Control de concurrencia optimista: toda mutacion incrementa la version.
-  version   Int      @default(1)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  version     Int       @default(1)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
   cancelledAt DateTime?
 
-  items        OrderItem[]
-  extras       OrderExtra[]
-  legs         FulfillmentLeg[]
-  events       OrderEvent[]
-  handoffs     Handoff[]
-  weights      WeightMeasurement[]
-  adjustments  PriceAdjustment[]
-  ledger       LedgerEntry[]
-  charges      CustomerCharge[]
-  incidents    Incident[]
-  messages     ChatMessage[]
+  items         OrderItem[]
+  extras        OrderExtra[]
+  legs          FulfillmentLeg[]
+  events        OrderEvent[]
+  handoffs      Handoff[]
+  weights       WeightMeasurement[]
+  adjustments   PriceAdjustment[]
+  ledger        LedgerEntry[]
+  charges       CustomerCharge[]
+  incidents     Incident[]
+  messages      ChatMessage[]
   notifications Notification[]
 
   @@index([customerId, status])
@@ -669,27 +673,27 @@ model Order {
 }
 
 model OrderItem {
-  id          String      @id @default(uuid()) @db.Uuid
-  orderId     String      @db.Uuid
-  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  garmentId   String      @db.Uuid
-  garment     GarmentType @relation(fields: [garmentId], references: [id])
-  serviceId   String      @db.Uuid
-  service     ServiceType @relation(fields: [serviceId], references: [id])
-  quantity    Int
+  id        String      @id @default(uuid()) @db.Uuid
+  orderId   String      @db.Uuid
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  garmentId String      @db.Uuid
+  garment   GarmentType @relation(fields: [garmentId], references: [id])
+  serviceId String      @db.Uuid
+  service   ServiceType @relation(fields: [serviceId], references: [id])
+  quantity  Int
   // Precio unitario congelado al crear.
-  unitPrice   Decimal     @db.Decimal(12, 2)
-  notes       String?
+  unitPrice Decimal     @db.Decimal(12, 2)
+  notes     String?
 
   @@index([orderId])
 }
 
 model OrderExtra {
-  id      String @id @default(uuid()) @db.Uuid
-  orderId String @db.Uuid
-  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  extraId String @db.Uuid
-  extra   Extra  @relation(fields: [extraId], references: [id])
+  id      String  @id @default(uuid()) @db.Uuid
+  orderId String  @db.Uuid
+  order   Order   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  extraId String  @db.Uuid
+  extra   Extra   @relation(fields: [extraId], references: [id])
   price   Decimal @db.Decimal(12, 2)
 
   @@index([orderId])
@@ -697,23 +701,23 @@ model OrderExtra {
 
 // Un tramo (recogida o entrega) con su direccion, franja, asignacion y avance propios.
 model FulfillmentLeg {
-  id          String    @id @default(uuid()) @db.Uuid
-  orderId     String    @db.Uuid
-  order       Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  kind        LegKind
-  method      LegMethod
-  status      LegStatus @default(SCHEDULED)
-  addressText String
-  latitude    Decimal   @db.Decimal(9, 6)
-  longitude   Decimal   @db.Decimal(9, 6)
+  id            String    @id @default(uuid()) @db.Uuid
+  orderId       String    @db.Uuid
+  order         Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  kind          LegKind
+  method        LegMethod
+  status        LegStatus @default(SCHEDULED)
+  addressText   String
+  latitude      Decimal   @db.Decimal(9, 6)
+  longitude     Decimal   @db.Decimal(9, 6)
   // Nulo mientras el tramo no tiene franja (p. ej. entrega aún sin programar).
   scheduledDate DateTime? @db.Date
-  slotId      String?   @db.Uuid
-  slot        TimeSlot? @relation(fields: [slotId], references: [id])
-  driverId    String?   @db.Uuid
-  driver      Driver?   @relation(fields: [driverId], references: [id])
-  startedAt   DateTime?
-  completedAt DateTime?
+  slotId        String?   @db.Uuid
+  slot          TimeSlot? @relation(fields: [slotId], references: [id])
+  driverId      String?   @db.Uuid
+  driver        Driver?   @relation(fields: [driverId], references: [id])
+  startedAt     DateTime?
+  completedAt   DateTime?
 
   reservations SlotReservation[]
 
@@ -722,15 +726,15 @@ model FulfillmentLeg {
 }
 
 model OrderEvent {
-  id          String       @id @default(uuid()) @db.Uuid
-  orderId     String       @db.Uuid
-  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  id          String      @id @default(uuid()) @db.Uuid
+  orderId     String      @db.Uuid
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
   status      OrderStatus
   title       String
   description String?
-  actorId     String?      @db.Uuid
+  actorId     String?     @db.Uuid
   actorRole   UserRole?
-  createdAt   DateTime     @default(now())
+  createdAt   DateTime    @default(now())
 
   @@index([orderId, createdAt])
 }
@@ -738,32 +742,32 @@ model OrderEvent {
 // ---------------------------------------------------------------- Custodia
 
 model Handoff {
-  id          String        @id @default(uuid()) @db.Uuid
-  orderId     String        @db.Uuid
-  order       Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  facilityId  String        @db.Uuid
-  facility    Facility      @relation(fields: [facilityId], references: [id])
-  type        HandoffType
-  status      HandoffStatus @default(PENDING)
+  id                    String        @id @default(uuid()) @db.Uuid
+  orderId               String        @db.Uuid
+  order                 Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  facilityId            String        @db.Uuid
+  facility              Facility      @relation(fields: [facilityId], references: [id])
+  type                  HandoffType
+  status                HandoffStatus @default(PENDING)
   // Hashes: el QR y el codigo manual se muestran una sola vez al generarse.
-  qrTokenHash String        @unique
-  codeHash    String
-  generation  Int           @default(1)
-  attempts    Int           @default(0)
-  maxAttempts Int
-  activatedAt DateTime?
-  expiresAt   DateTime?
-  usedAt      DateTime?
-  usedById    String?       @db.Uuid
-  receivedCount Int?
-  declaredCount Int?
-  recipientName String?
+  qrTokenHash           String        @unique
+  codeHash              String
+  generation            Int           @default(1)
+  attempts              Int           @default(0)
+  maxAttempts           Int
+  activatedAt           DateTime?
+  expiresAt             DateTime?
+  usedAt                DateTime?
+  usedById              String?       @db.Uuid
+  receivedCount         Int?
+  declaredCount         Int?
+  recipientName         String?
   recipientRelationship String?
-  notes       String?
-  evidenceRef String?
-  previousId  String?       @db.Uuid
-  createdAt   DateTime      @default(now())
-  updatedAt   DateTime      @updatedAt
+  notes                 String?
+  evidenceRef           String?
+  previousId            String?       @db.Uuid
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
 
   audits HandoffAudit[]
 
@@ -771,14 +775,14 @@ model Handoff {
 }
 
 model HandoffAudit {
-  id        String   @id @default(uuid()) @db.Uuid
-  handoffId String   @db.Uuid
-  handoff   Handoff  @relation(fields: [handoffId], references: [id], onDelete: Cascade)
+  id        String    @id @default(uuid()) @db.Uuid
+  handoffId String    @db.Uuid
+  handoff   Handoff   @relation(fields: [handoffId], references: [id], onDelete: Cascade)
   action    String
-  actorId   String?  @db.Uuid
+  actorId   String?   @db.Uuid
   actorRole UserRole?
   reason    String?
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   @@index([handoffId])
 }
@@ -786,12 +790,12 @@ model HandoffAudit {
 // ---------------------------------------------------------------- Peso, ajustes y dinero
 
 model WeightMeasurement {
-  id         String   @id @default(uuid()) @db.Uuid
-  orderId    String   @db.Uuid
-  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  weightGrams Int
-  measuredById String? @db.Uuid
-  createdAt  DateTime @default(now())
+  id           String   @id @default(uuid()) @db.Uuid
+  orderId      String   @db.Uuid
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  weightGrams  Int
+  measuredById String?  @db.Uuid
+  createdAt    DateTime @default(now())
 
   @@index([orderId])
 }
@@ -815,57 +819,57 @@ model PriceAdjustment {
 
 // Libro mayor inmutable. El saldo de la billetera se deriva de la suma de sus entradas.
 model LedgerEntry {
-  id         String          @id @default(uuid()) @db.Uuid
-  customerId String          @db.Uuid
-  customer   Customer        @relation(fields: [customerId], references: [id])
-  orderId    String?         @db.Uuid
-  order      Order?          @relation(fields: [orderId], references: [id])
-  chargeId   String?         @db.Uuid
-  charge     CustomerCharge? @relation(fields: [chargeId], references: [id])
-  type       LedgerEntryType
+  id             String          @id @default(uuid()) @db.Uuid
+  customerId     String          @db.Uuid
+  customer       Customer        @relation(fields: [customerId], references: [id])
+  orderId        String?         @db.Uuid
+  order          Order?          @relation(fields: [orderId], references: [id])
+  chargeId       String?         @db.Uuid
+  charge         CustomerCharge? @relation(fields: [chargeId], references: [id])
+  type           LedgerEntryType
   // Positivo = abono a favor del cliente; negativo = cargo.
-  amount     Decimal         @db.Decimal(12, 2)
-  reference  String
-  description String?
+  amount         Decimal         @db.Decimal(12, 2)
+  reference      String
+  description    String?
   // Evita duplicar el mismo movimiento ante reintentos.
-  idempotencyKey String?     @unique
-  createdAt  DateTime        @default(now())
+  idempotencyKey String?         @unique
+  createdAt      DateTime        @default(now())
 
   @@index([customerId, createdAt])
 }
 
 model PaymentMethod {
-  id         String            @id @default(uuid()) @db.Uuid
-  customerId String            @db.Uuid
-  customer   Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  kind       PaymentMethodKind
-  holder     String
-  last4      String
+  id            String            @id @default(uuid()) @db.Uuid
+  customerId    String            @db.Uuid
+  customer      Customer          @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  kind          PaymentMethodKind
+  holder        String
+  last4         String
   // Referencia del proveedor de pagos (pendiente de definir); nunca el numero completo.
   providerToken String?
-  brand      String?
-  expiry     String?
-  bank       String?
-  isDefault  Boolean           @default(false)
-  deletedAt  DateTime?
-  createdAt  DateTime          @default(now())
+  brand         String?
+  expiry        String?
+  bank          String?
+  isDefault     Boolean           @default(false)
+  deletedAt     DateTime?
+  createdAt     DateTime          @default(now())
 
   @@index([customerId])
 }
 
 model CustomerCharge {
-  id         String       @id @default(uuid()) @db.Uuid
-  customerId String       @db.Uuid
-  customer   Customer     @relation(fields: [customerId], references: [id])
-  orderId    String?      @db.Uuid
-  order      Order?       @relation(fields: [orderId], references: [id])
-  type       ChargeType
-  amount     Decimal      @db.Decimal(12, 2)
-  status     ChargeStatus @default(PENDING)
-  reason     String
+  id           String       @id @default(uuid()) @db.Uuid
+  customerId   String       @db.Uuid
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  orderId      String?      @db.Uuid
+  order        Order?       @relation(fields: [orderId], references: [id])
+  type         ChargeType
+  amount       Decimal      @db.Decimal(12, 2)
+  status       ChargeStatus @default(PENDING)
+  reason       String
   waivedReason String?
-  createdAt  DateTime     @default(now())
-  paidAt     DateTime?
+  createdAt    DateTime     @default(now())
+  paidAt       DateTime?
 
   ledger LedgerEntry[]
 
@@ -886,17 +890,17 @@ model PointsLedgerEntry {
 }
 
 model RewardRedemption {
-  id         String           @id @default(uuid()) @db.Uuid
-  customerId String           @db.Uuid
-  customer   Customer         @relation(fields: [customerId], references: [id])
-  rewardId   String           @db.Uuid
-  reward     Reward           @relation(fields: [rewardId], references: [id])
-  pointsCost Int
-  status     RedemptionStatus @default(PENDING)
-  reviewedById String?        @db.Uuid
+  id           String           @id @default(uuid()) @db.Uuid
+  customerId   String           @db.Uuid
+  customer     Customer         @relation(fields: [customerId], references: [id])
+  rewardId     String           @db.Uuid
+  reward       Reward           @relation(fields: [rewardId], references: [id])
+  pointsCost   Int
+  status       RedemptionStatus @default(PENDING)
+  reviewedById String?          @db.Uuid
   reviewReason String?
-  createdAt  DateTime         @default(now())
-  reviewedAt DateTime?
+  createdAt    DateTime         @default(now())
+  reviewedAt   DateTime?
 
   @@index([customerId, status])
 }
@@ -904,22 +908,22 @@ model RewardRedemption {
 // ---------------------------------------------------------------- Soporte y trazabilidad
 
 model Incident {
-  id          String           @id @default(uuid()) @db.Uuid
-  orderId     String           @db.Uuid
-  order       Order            @relation(fields: [orderId], references: [id])
-  driverId    String?          @db.Uuid
-  driver      Driver?          @relation(fields: [driverId], references: [id])
-  type        String
-  severity    IncidentSeverity
-  status      IncidentStatus   @default(OPEN)
-  description String
-  resolution  String?
+  id             String           @id @default(uuid()) @db.Uuid
+  orderId        String           @db.Uuid
+  order          Order            @relation(fields: [orderId], references: [id])
+  driverId       String?          @db.Uuid
+  driver         Driver?          @relation(fields: [driverId], references: [id])
+  type           String
+  severity       IncidentSeverity
+  status         IncidentStatus   @default(OPEN)
+  description    String
+  resolution     String?
   // Si la incidencia retuvo el pedido (estado INCIDENT), estado al que vuelve al resolverse.
   previousStatus OrderStatus?
-  evidenceRefs String[]
-  createdById String?          @db.Uuid
-  createdAt   DateTime         @default(now())
-  resolvedAt  DateTime?
+  evidenceRefs   String[]
+  createdById    String?          @db.Uuid
+  createdAt      DateTime         @default(now())
+  resolvedAt     DateTime?
 
   @@index([orderId])
   @@index([status, severity])
@@ -953,17 +957,17 @@ model Notification {
 }
 
 model AuditLog {
-  id         String    @id @default(uuid()) @db.Uuid
-  actorId    String?   @db.Uuid
-  actor      User?     @relation(fields: [actorId], references: [id])
-  actorRole  UserRole?
-  action     String
-  entity     String
-  entityId   String?
-  reason     String?
-  before     Json?
-  after      Json?
-  createdAt  DateTime  @default(now())
+  id        String    @id @default(uuid()) @db.Uuid
+  actorId   String?   @db.Uuid
+  actor     User?     @relation(fields: [actorId], references: [id])
+  actorRole UserRole?
+  action    String
+  entity    String
+  entityId  String?
+  reason    String?
+  before    Json?
+  after     Json?
+  createdAt DateTime  @default(now())
 
   @@index([entity, entityId])
   @@index([actorId, createdAt])
@@ -971,12 +975,12 @@ model AuditLog {
 
 // Reintentos seguros de comandos (pagos, creacion de pedidos).
 model IdempotencyKey {
-  key        String   @id
-  userId     String   @db.Uuid
-  endpoint   String
+  key            String   @id
+  userId         String   @db.Uuid
+  endpoint       String
   responseStatus Int
-  responseBody Json
-  createdAt  DateTime @default(now())
+  responseBody   Json
+  createdAt      DateTime @default(now())
 
   @@index([createdAt])
 }

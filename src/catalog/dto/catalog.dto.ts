@@ -37,7 +37,14 @@ export class UpdateGarmentDto extends PartialType(CreateGarmentDto) {
 
 export class CreateServiceTypeDto {
   @IsString() @IsNotEmpty() @MaxLength(80) name: string;
+  // null borra la descripción o el tiempo estimado al editar.
+  @IsOptional() @IsString() @MaxLength(300) description?: string | null;
   @money() extraPrice: number;
+  @IsOptional()
+  @IsInt({ message: 'El tiempo estimado se indica en horas enteras.' })
+  @Min(1, { message: 'El tiempo estimado debe ser de al menos 1 hora.' })
+  @Max(720, { message: 'El tiempo estimado no puede superar 720 horas (30 días).' })
+  estimatedHours?: number | null;
 }
 export class UpdateServiceTypeDto extends PartialType(CreateServiceTypeDto) {
   @IsOptional() @IsBoolean() active?: boolean;

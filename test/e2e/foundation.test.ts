@@ -258,6 +258,31 @@ describe('catálogo y promociones', () => {
     const after = await t.http.get(`${api}/catalog/weight-restrictions`).expect(200);
     assert.equal(after.body.length, 1);
   });
+  it('los servicios guardan descripción y tiempo estimado, visibles en el catálogo público', async () => {
+    const post = (body: object) =>
+      t.http.post(`${api}/catalog/services`).set(bearer(admin)).send(body);
+    await post({ name: 'Sin horas', extraPrice: 1, estimatedHours: 0 }).expect(400);
+    await post({ name: 'Demasiadas horas', extraPrice: 1, estimatedHours: 721 }).expect(400);
+    await post({ name: 'Horas con decimales', extraPrice: 1, estimatedHours: 1.5 }).expect(400);
+    const created = await post({
+      name: 'Lavado premium',
+      extraPrice: 3,
+      description: '  Lavado a mano con secado al aire  ',
+      estimatedHours: 48,
+    }).expect(201);
+    assert.equal(created.body.description, 'Lavado a mano con secado al aire');
+    assert.equal(created.body.estimatedHours, 48);
+    const listed = await t.http.get(`${api}/catalog/services`).expect(200);
+    const row = listed.body.find((s: { id: string }) => s.id === created.body.id);
+    assert.deepEqual([row.description, row.estimatedHours], ['Lavado a mano con secado al aire', 48]);
+    // null borra ambos datos al editar.
+    const cleared = await t.http
+      .patch(`${api}/catalog/services/${created.body.id}`)
+      .set(bearer(admin))
+      .send({ description: null, estimatedHours: null })
+      .expect(200);
+    assert.deepEqual([cleared.body.description, cleared.body.estimatedHours], [null, null]);
+  });
   it('valida promociones', async () => {
     const base = { code: 'PROMO1', discountType: 'PERCENTAGE', discountValue: 10 };
     const post = (body: object) =>
