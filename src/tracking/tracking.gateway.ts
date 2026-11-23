@@ -38,11 +38,82 @@ export interface DriverLocationUpdateMessage {
 export interface OrderStatusBroadcast {
   orderId: string;
   orderNumber?: number;
+  facilityId?: string;
   status: OrderStatus;
   activeLeg: 'INBOUND' | 'OUTBOUND' | null;
   customerUserId: string;
   driverUserIds?: string[];
   updatedAt: string;
+}
+
+export interface AdminMapDriverPayload {
+  driverId: string;
+  name: string;
+  phone: string | null;
+  vehicle: string | null;
+  plate: string | null;
+  status: string;
+  facilityId: string;
+  zoneId: string;
+  lat: number | null;
+  lng: number | null;
+  heading?: number;
+  speed?: number;
+  locationAt: string | null;
+}
+
+export interface AdminMapOrderPayload {
+  orderId: string;
+  orderNumber: number;
+  status: OrderStatus;
+  kind: 'pickup' | 'delivery';
+  facilityId: string;
+  zoneId: string;
+  customerName: string;
+  addressText: string;
+  lat: number;
+  lng: number;
+}
+
+export interface AdminMapIncidentPayload {
+  incidentId: string;
+  orderId: string;
+  orderNumber: number;
+  facilityId: string;
+  zoneId: string;
+  description: string;
+  severity: string;
+  status: string;
+  lat: number;
+  lng: number;
+}
+
+export interface AdminMapSnapshot {
+  scope: 'ADMIN' | 'SUPERVISOR';
+  scopedFacilityId: string | null;
+  drivers: AdminMapDriverPayload[];
+  orders: AdminMapOrderPayload[];
+  incidents: AdminMapIncidentPayload[];
+  generatedAt: string;
+}
+
+const ADMIN_MAP_ALL_ROOM = 'admin:map:all';
+const ADMIN_MAP_LOCATION_THROTTLE_MS = 2_000;
+const NO_FACILITY_ID = '00000000-0000-0000-0000-000000000000';
+const PICKUP_MAP_STATUSES: readonly OrderStatus[] = [
+  'CONFIRMED',
+  'PICKUP_ASSIGNED',
+  'HEADING_TO_PICKUP',
+  'ARRIVED_FOR_PICKUP',
+];
+const DELIVERY_MAP_STATUSES: readonly OrderStatus[] = [
+  'DELIVERY_ASSIGNED',
+  'OUT_FOR_DELIVERY',
+  'ARRIVED_FOR_DELIVERY',
+];
+
+function adminFacilityRoom(facilityId: string): string {
+  return `admin:map:facility:${facilityId}`;
 }
 
 export interface OrderEtaBroadcast {
@@ -79,6 +150,7 @@ export class TrackingGateway
   private readonly userSockets = new Map<string, Set<string>>();
   private readonly driverLocations = new Map<string, LiveDriverLocation>();
   private readonly locationWriteQueue = new Map<string, LiveDriverLocation>();
+  private readonly adminMapLastEmitAt = new Map<string, number>();
   private batchTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -206,6 +278,55 @@ export class TrackingGateway
     return { event: 'order:unsubscribed', data: { success: true, orderId } };
   }
 
+  /**
+   * Canal operativo del mapa web (`admin:map:*`, portado de AnubisRide).
+   * - ADMIN: se une a `admin:map:all` y recibe la operación global.
+   * - SUPERVISOR: se une SOLO a `admin:map:facility:<facilityId>` y recibe únicamente
+   *   su sede/zona asignada.
+   */
+  @SubscribeMessage('admin:map:subscribe')
+  async handleAdminMapSubscribe(@ConnectedSocket() client: AuthenticatedSocket) {
+    if (client.userRole !== 'ADMIN' && client.userRole !== 'SUPERVISOR') {
+      return {
+        event: 'admin:map:error',
+        data: { success: false, error: 'forbidden' },
+      };
+    }
+
+    if (client.userRole === 'ADMIN') {
+      await client.join(ADMIN_MAP_ALL_ROOM);
+    } else if (client.facilityId) {
+      await client.join(adminFacilityRoom(client.facilityId));
+    }
+
+    const snapshot = await this.buildAdminMapSnapshot(
+      client.userRole,
+      client.facilityId ?? null,
+    );
+    client.emit('admin:map:snapshot', snapshot);
+
+    return {
+      event: 'admin:map:subscribed',
+      data: {
+        success: true,
+        scope: snapshot.scope,
+        scopedFacilityId: snapshot.scopedFacilityId,
+        drivers: snapshot.drivers.length,
+        orders: snapshot.orders.length,
+        incidents: snapshot.incidents.length,
+      },
+    };
+  }
+
+  @SubscribeMessage('admin:map:unsubscribe')
+  async handleAdminMapUnsubscribe(@ConnectedSocket() client: AuthenticatedSocket) {
+    await client.leave(ADMIN_MAP_ALL_ROOM);
+    if (client.facilityId) {
+      await client.leave(adminFacilityRoom(client.facilityId));
+    }
+    return { event: 'admin:map:unsubscribed', data: { success: true } };
+  }
+
   @SubscribeMessage('driver:location:update')
   async handleDriverLocationUpdate(
     @MessageBody() data: DriverLocationUpdateMessage,
@@ -316,6 +437,67 @@ export class TrackingGateway
       this.server.to(`order:${payload.orderId}`).emit('order:driver_arrived', arrivedWire);
       this.emitToUser(payload.customerUserId, 'order:driver_arrived', arrivedWire);
     }
+
+    // Notificar al mapa operativo (ADMIN global + SUPERVISOR de la sede).
+    this.emitToAdminMap(payload.facilityId, 'admin:map:order-updated', {
+      orderId: payload.orderId,
+      orderNumber: payload.orderNumber,
+      status: payload.status,
+      activeLeg: payload.activeLeg,
+      facilityId: payload.facilityId ?? null,
+      updatedAt: payload.updatedAt,
+    });
+  }
+
+  emitDriverOfflineToAdminMap(driverId: string, facilityId?: string): void {
+    this.emitToAdminMap(facilityId, 'admin:map:driver-offline', { driverId });
+  }
+
+  async emitDriverProfileToAdminMap(driverId: string): Promise<void> {
+    if (!this.server) return;
+    const d = await this.prisma.driver.findUnique({
+      where: { id: driverId },
+      include: {
+        user: { select: { name: true, phone: true } },
+        facility: { select: { id: true, zoneId: true } },
+      },
+    });
+    if (!d) return;
+    const live = this.driverLocations.get(driverId);
+    const payload: AdminMapDriverPayload = {
+      driverId: d.id,
+      name: d.user.name,
+      phone: d.user.phone,
+      vehicle: d.vehicle,
+      plate: d.plate,
+      status: d.status,
+      facilityId: d.facilityId,
+      zoneId: d.facility.zoneId,
+      lat: live?.lat ?? (d.latitude !== null ? Number(d.latitude) : null),
+      lng: live?.lng ?? (d.longitude !== null ? Number(d.longitude) : null),
+      heading: live?.heading,
+      speed: live?.speed,
+      locationAt: live
+        ? new Date(live.timestamp).toISOString()
+        : d.locationAt
+          ? d.locationAt.toISOString()
+          : null,
+    };
+    this.emitToAdminMap(d.facilityId, 'admin:map:driver-locations', {
+      drivers: [payload],
+    });
+  }
+
+  private emitToAdminMap(
+    facilityId: string | null | undefined,
+    event: string,
+    data: unknown,
+  ): void {
+    if (!this.server) return;
+    this.server.to(ADMIN_MAP_ALL_ROOM).emit(event, data);
+    if (facilityId) {
+      this.server.to(adminFacilityRoom(facilityId)).emit(event, data);
+    }
   }
 
   emitOrderEtaUpdated(
@@ -400,6 +582,140 @@ export class TrackingGateway
       speed: fix.speed,
       locationAt,
     });
+
+    // Emisión throttled al canal `admin:map:*` respetando alcance ADMIN vs SUPERVISOR por sede.
+    const now = Date.now();
+    const lastEmit = this.adminMapLastEmitAt.get(driverId) ?? 0;
+    if (now - lastEmit >= ADMIN_MAP_LOCATION_THROTTLE_MS) {
+      this.adminMapLastEmitAt.set(driverId, now);
+      await this.emitDriverProfileToAdminMap(driverId);
+    }
+  }
+
+  private async buildAdminMapSnapshot(
+    role: 'ADMIN' | 'SUPERVISOR',
+    facilityId: string | null,
+  ): Promise<AdminMapSnapshot> {
+    const isSupervisor = role === 'SUPERVISOR';
+    const scopedFacilityId = isSupervisor ? (facilityId ?? NO_FACILITY_ID) : undefined;
+
+    const [drivers, orders, incidents] = await Promise.all([
+      this.prisma.driver.findMany({
+        where: isSupervisor ? { facilityId: scopedFacilityId } : {},
+        include: {
+          user: { select: { name: true, phone: true } },
+          facility: { select: { id: true, zoneId: true } },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+      this.prisma.order.findMany({
+        where: {
+          ...(isSupervisor ? { facilityId: scopedFacilityId } : {}),
+          status: { in: [...PICKUP_MAP_STATUSES, ...DELIVERY_MAP_STATUSES] },
+        },
+        include: {
+          customer: { include: { user: { select: { name: true } } } },
+          facility: { select: { id: true, zoneId: true } },
+          legs: {
+            select: {
+              kind: true,
+              addressText: true,
+              latitude: true,
+              longitude: true,
+            },
+          },
+        },
+        orderBy: { updatedAt: 'desc' },
+      }),
+      this.prisma.incident.findMany({
+        where: {
+          status: { in: ['OPEN', 'IN_REVIEW'] },
+          ...(isSupervisor ? { order: { facilityId: scopedFacilityId } } : {}),
+        },
+        include: {
+          order: {
+            select: {
+              id: true,
+              number: true,
+              facilityId: true,
+              facility: { select: { zoneId: true } },
+              legs: {
+                where: { kind: 'INBOUND' },
+                select: { latitude: true, longitude: true },
+              },
+            },
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ]);
+
+    return {
+      scope: role,
+      scopedFacilityId: isSupervisor ? facilityId : null,
+      drivers: drivers.map((d) => {
+        const live = this.driverLocations.get(d.id);
+        return {
+          driverId: d.id,
+          name: d.user.name,
+          phone: d.user.phone,
+          vehicle: d.vehicle,
+          plate: d.plate,
+          status: d.status,
+          facilityId: d.facilityId,
+          zoneId: d.facility.zoneId,
+          lat: live?.lat ?? (d.latitude !== null ? Number(d.latitude) : null),
+          lng: live?.lng ?? (d.longitude !== null ? Number(d.longitude) : null),
+          heading: live?.heading,
+          speed: live?.speed,
+          locationAt: live
+            ? new Date(live.timestamp).toISOString()
+            : d.locationAt
+              ? d.locationAt.toISOString()
+              : null,
+        };
+      }),
+      orders: orders
+        .map((o) => {
+          const isDelivery = DELIVERY_MAP_STATUSES.includes(o.status);
+          const leg =
+            o.legs.find((l) => l.kind === (isDelivery ? 'OUTBOUND' : 'INBOUND')) ??
+            o.legs[0];
+          if (!leg) return null;
+          return {
+            orderId: o.id,
+            orderNumber: o.number,
+            status: o.status,
+            kind: isDelivery ? ('delivery' as const) : ('pickup' as const),
+            facilityId: o.facilityId,
+            zoneId: o.facility.zoneId,
+            customerName: o.customer.user.name,
+            addressText: leg.addressText,
+            lat: Number(leg.latitude),
+            lng: Number(leg.longitude),
+          };
+        })
+        .filter((x): x is AdminMapOrderPayload => x !== null),
+      incidents: incidents
+        .map((inc): AdminMapIncidentPayload | null => {
+          const leg = inc.order.legs[0];
+          if (!leg) return null;
+          return {
+            incidentId: inc.id,
+            orderId: inc.order.id,
+            orderNumber: inc.order.number,
+            facilityId: inc.order.facilityId,
+            zoneId: inc.order.facility.zoneId,
+            description: inc.description,
+            severity: String(inc.severity),
+            status: String(inc.status),
+            lat: Number(leg.latitude),
+            lng: Number(leg.longitude),
+          };
+        })
+        .filter((x): x is AdminMapIncidentPayload => x !== null),
+      generatedAt: new Date().toISOString(),
+    };
   }
 
   private async flushLocationWrites(): Promise<void> {

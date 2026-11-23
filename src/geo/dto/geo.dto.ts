@@ -23,6 +23,11 @@ export class PolygonPointDto {
   @IsLongitude() lng: number;
 }
 
+export class ByPointDto {
+  @IsLatitude({ message: 'Latitud inválida.' }) lat: number;
+  @IsLongitude({ message: 'Longitud inválida.' }) lng: number;
+}
+
 export class CreateZoneDto {
   @IsString() @IsNotEmpty() @MaxLength(120) name: string;
   @IsArray()

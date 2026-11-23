@@ -15,6 +15,7 @@ import {
   type AuthUser,
 } from '../common/decorators/auth.decorators';
 import {
+  ByPointDto,
   CreateFacilityDto,
   CreateZoneDto,
   UpdateFacilityDto,
@@ -34,6 +35,25 @@ export class GeoController {
   @Get('zones')
   zones(@CurrentUser() user?: AuthUser) {
     return this.geo.listZones(user?.role === 'ADMIN');
+  }
+
+  // Rutas estáticas ANTES de :id para evitar colisiones.
+  @Public()
+  @Post('zones/by-point')
+  findZoneByPoint(@Body() dto: ByPointDto) {
+    return this.geo.findZoneByPoint(dto.lat, dto.lng);
+  }
+
+  @Roles('ADMIN', 'SUPERVISOR')
+  @Get('zones/metrics/summary')
+  metricsSummary(@CurrentUser() actor: AuthUser) {
+    return this.geo.getZonesMetricsSummary(actor);
+  }
+
+  @Roles('ADMIN', 'SUPERVISOR')
+  @Get('zones/operational-snapshot')
+  operationalSnapshot(@CurrentUser() actor: AuthUser) {
+    return this.geo.getOperationalSnapshot(actor);
   }
 
   @Roles('ADMIN')

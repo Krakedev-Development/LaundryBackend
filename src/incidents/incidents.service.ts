@@ -54,7 +54,7 @@ export class IncidentsService {
         ? await this.prisma.driver.findUnique({ where: { userId: user.id } })
         : null;
 
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       const incident = await tx.incident.create({
         data: {
           orderId: order.id,
@@ -92,6 +92,9 @@ export class IncidentsService {
       }
       return incident;
     });
+    // Retener detiene el seguimiento en vivo: se avisa a la app del cliente y del chofer.
+    if (dto.holdOrder) await this.orders.notifyStatusChangedById(order.id);
+    return created;
   }
 
   async list(user: AuthUser, q: { status?: string; orderId?: string }) {
@@ -129,7 +132,7 @@ export class IncidentsService {
     if (dto.status === 'RESOLVED' && !dto.resolution?.trim())
       throw new BadRequestException('Describe la resolución.');
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.incident.updateMany({
         where: { id, status: incident.status },
         data: {
@@ -143,6 +146,11 @@ export class IncidentsService {
         await this.releaseOrder(tx, incident.order, incident.previousStatus, user);
       return tx.incident.findUniqueOrThrow({ where: { id } });
     });
+    // Al liberar, el pedido vuelve a su estado previo: si era un tramo hacia el cliente se
+    // reanuda el seguimiento en vivo y el envío del tiempo estimado.
+    if (dto.status === 'RESOLVED' && incident.previousStatus)
+      await this.orders.notifyStatusChangedById(incident.orderId);
+    return updated;
   }
 
   // Devuelve el pedido al estado en que estaba cuando se retuvo.

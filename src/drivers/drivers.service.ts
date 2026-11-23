@@ -127,6 +127,11 @@ export class DriversService {
         dto.speed,
       );
     }
+    if (dto.status === 'OFFLINE') {
+      this.tracking?.emitDriverOfflineToAdminMap(driver.id, driver.facilityId);
+    } else if (dto.status && !hasLat) {
+      void this.tracking?.emitDriverProfileToAdminMap(driver.id);
+    }
     return this.view(driver);
   }
 

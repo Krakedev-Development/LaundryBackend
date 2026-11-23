@@ -771,7 +771,7 @@ export class OrdersService {
     if (['CANCELLED', 'COMPLETED'].includes(order.status))
       throw new ConflictException('El pedido ya no admite pagos.');
 
-    return this.prisma.$transaction(async (tx) => {
+    const paidOrder = await this.prisma.$transaction(async (tx) => {
       await this.wallet.lockCustomer(tx, order.customerId);
       const outstanding = new D(order.total).sub(await this.paidAmount(tx, id));
       if (outstanding.lte(0)) throw new ConflictException('El pedido no tiene saldo pendiente.');
@@ -796,8 +796,10 @@ export class OrdersService {
         await this.bump(tx, order, user, 'Pago de diferencia recibido');
         await tx.order.update({ where: { id }, data: { paymentStatus: 'PAID' } });
       }
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    if (paidOrder.status !== order.status) this.notifyOrderRealtimeStatus(paidOrder);
+    return this.view(paidOrder);
   }
 
   // Confirmación manual del personal (transferencia o pago fuera de la app). El dinero externo
@@ -815,7 +817,7 @@ export class OrdersService {
       throw new ConflictException('El pedido no tiene un pago pendiente por confirmar.');
 
     const note = dto.note?.trim() || 'Pago confirmado por administración';
-    return this.prisma.$transaction(async (tx) => {
+    const confirmedOrder = await this.prisma.$transaction(async (tx) => {
       await this.wallet.lockCustomer(tx, order.customerId);
       const outstanding = new D(order.total).sub(await this.paidAmount(tx, id));
       if (difference && outstanding.lte(0))
@@ -854,8 +856,10 @@ export class OrdersService {
           after: { amount: outstanding.toString() },
         },
       });
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    if (confirmedOrder.status !== order.status) this.notifyOrderRealtimeStatus(confirmedOrder);
+    return this.view(confirmedOrder);
   }
 
   // Cierra el pedido entregado. Requiere que no quede saldo por cobrar.
@@ -867,7 +871,7 @@ export class OrdersService {
     this.assertVersion(order, dto.expectedVersion);
     if (order.status !== 'DELIVERED')
       throw new ConflictException('Solo se cierra un pedido entregado.');
-    return this.prisma.$transaction(async (tx) => {
+    const closedOrder = await this.prisma.$transaction(async (tx) => {
       const outstanding = new D(order.total).sub(await this.paidAmount(tx, id));
       if (outstanding.gt(0))
         throw new ConflictException(
@@ -875,8 +879,10 @@ export class OrdersService {
         );
       await this.applyTransition(tx, order, 'COMPLETED', user, 'Pedido cerrado');
       await this.points.accrueForOrder(tx, order);
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    this.notifyOrderRealtimeStatus(closedOrder);
+    return this.view(closedOrder);
   }
 
   // Carga el pedido validando que el usuario pueda verlo (para módulos colaboradores).
