@@ -42,6 +42,9 @@ export class EnvironmentVariables {
   @IsOptional() @IsString() SMTP_USER?: string;
   @IsOptional() @IsString() SMTP_PASS?: string;
   @IsOptional() @IsString() MAIL_FROM?: string;
+
+  // Token de Mapbox Directions API (opcional; sin él usa OSRM/Haversine de respaldo).
+  @IsOptional() @IsString() MAPBOX_ACCESS_TOKEN?: string;
 }
 
 export function validateEnv(raw: Record<string, unknown>): EnvironmentVariables {

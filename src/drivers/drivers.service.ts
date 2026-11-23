@@ -3,10 +3,12 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import type { AuthUser } from '../common/decorators/auth.decorators';
 import type { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 import type {
   ListDriversQuery,
   UpdateDriverDto,
@@ -31,7 +33,10 @@ const NO_FACILITY = '00000000-0000-0000-0000-000000000000';
 
 @Injectable()
 export class DriversService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly tracking?: TrackingGateway,
+  ) {}
 
   // ---- Gestión (administrador y supervisor)
 
@@ -113,6 +118,15 @@ export class DriversService {
       },
       include: DRIVER_INCLUDE,
     });
+    if (hasLat && dto.latitude !== undefined && dto.longitude !== undefined) {
+      void this.tracking?.recordDriverLocationFromHttp(
+        driver.id,
+        dto.latitude,
+        dto.longitude,
+        dto.heading,
+        dto.speed,
+      );
+    }
     return this.view(driver);
   }
 

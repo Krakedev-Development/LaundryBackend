@@ -29,5 +29,7 @@ export class UpdateDriverDto {
 export class UpdateLocationDto {
   @IsOptional() @IsNumber() @IsLatitude() latitude?: number;
   @IsOptional() @IsNumber() @IsLongitude() longitude?: number;
+  @IsOptional() @IsNumber() heading?: number;
+  @IsOptional() @IsNumber() speed?: number;
   @IsOptional() @IsIn(DRIVER_STATUSES) status?: DriverStatusValue;
 }

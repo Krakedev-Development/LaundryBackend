@@ -192,6 +192,7 @@ export class HandoffsService {
         `Custodia verificada (${dto.type})`,
       );
     });
+    await this.orders.notifyStatusChangedById(orderId);
     return this.orders.viewFor(user, orderId);
   }
 

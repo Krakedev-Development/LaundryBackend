@@ -65,6 +65,28 @@ export class OrdersController {
     return this.orders.tracking(user, id);
   }
 
+  @Roles('CLIENT', 'ADMIN', 'SUPERVISOR', 'DRIVER')
+  @Get(':id/route')
+  route(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('driverLat') driverLat?: string,
+    @Query('driverLng') driverLng?: string,
+    @Query('driverHeading') driverHeading?: string,
+  ) {
+    return this.orders.route(user, id, {
+      driverLat: driverLat !== undefined ? Number(driverLat) : undefined,
+      driverLng: driverLng !== undefined ? Number(driverLng) : undefined,
+      driverHeading: driverHeading !== undefined ? Number(driverHeading) : undefined,
+    });
+  }
+
+  @Roles('CLIENT', 'ADMIN', 'SUPERVISOR', 'DRIVER')
+  @Get(':id/eta')
+  eta(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.orders.eta(user, id);
+  }
+
   @Post(':id/transitions')
   transition(
     @CurrentUser() user: AuthUser,

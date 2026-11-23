@@ -26,6 +26,7 @@ import { PrismaModule } from './prisma/prisma.module';
 import { MailModule } from './mail/mail.module';
 import { UsersModule } from './users/users.module';
 import { DriversModule } from './drivers/drivers.module';
+import { TrackingModule } from './tracking/tracking.module';
 
 @Module({
   imports: [
@@ -71,6 +72,7 @@ import { DriversModule } from './drivers/drivers.module';
     KycModule,
     IncidentsModule,
     ChatModule,
+    TrackingModule,
   ],
   providers: [
     // Orden: límite de tasa, autenticación, autorización por rol.
