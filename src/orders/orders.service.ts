@@ -29,6 +29,7 @@ import type {
   CreateOrderDto,
   FailedPickupDto,
   ListOrdersQuery,
+  RescheduleOrderDto,
   ScheduleInboundDto,
   ScheduleOutboundDto,
   TransitionDto,
@@ -44,6 +45,7 @@ import {
 } from './order-state-machine';
 import { computePricing } from './pricing';
 import { trackingLegFor } from './tracking';
+import { evaluateDriverCandidates } from './driver-candidates.util';
 import {
   isLiveCustomerTrackingStatus,
   isLocationFresh,
@@ -51,6 +53,7 @@ import {
 } from '../tracking/tracking.constants';
 import { TrackingGateway } from '../tracking/tracking.gateway';
 import { OrderEtaService } from '../tracking/order-eta.service';
+import { MapboxDirectionsService } from '../tracking/mapbox-directions.service';
 
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
@@ -93,6 +96,7 @@ export class OrdersService {
     private readonly points: PointsService,
     @Optional() private readonly trackingGateway?: TrackingGateway,
     @Optional() private readonly orderEta?: OrderEtaService,
+    @Optional() private readonly directions?: MapboxDirectionsService,
   ) {}
 
   // ------------------------------------------------------------------ Creación
@@ -493,6 +497,146 @@ export class OrdersService {
     });
   }
 
+  async driverCandidates(
+    user: AuthUser,
+    id: string,
+    requestedLeg?: 'INBOUND' | 'OUTBOUND',
+  ) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+
+    const legKind: 'INBOUND' | 'OUTBOUND' =
+      requestedLeg ??
+      ([
+        'READY_FOR_DELIVERY',
+        'DELIVERY_ASSIGNED',
+        'OUT_FOR_DELIVERY',
+        'ARRIVED_FOR_DELIVERY',
+      ].includes(order.status)
+        ? 'OUTBOUND'
+        : 'INBOUND');
+
+    const targetLeg = order.legs.find((l) => l.kind === legKind) ?? order.legs[0];
+    if (!targetLeg) {
+      throw new NotFoundException('El pedido no tiene un tramo logístico válido.');
+    }
+
+    const [policy, facility, drivers] = await Promise.all([
+      this.policies.requireActive().catch(() => null),
+      this.prisma.facility.findUnique({
+        where: { id: order.facilityId },
+        select: { id: true, zoneId: true, latitude: true, longitude: true },
+      }),
+      this.prisma.driver.findMany({
+        where:
+          user.role === 'SUPERVISOR'
+            ? { facilityId: user.facilityId ?? '00000000-0000-0000-0000-000000000000' }
+            : { facilityId: order.facilityId },
+        include: {
+          user: { select: { name: true, phone: true } },
+          zones: { select: { zoneId: true } },
+          legs: {
+            where: {
+              status: { notIn: ['COMPLETED', 'CANCELLED'] },
+            },
+            orderBy: [{ scheduledDate: 'asc' }, { id: 'asc' }],
+            select: {
+              latitude: true,
+              longitude: true,
+            },
+          },
+        },
+        orderBy: { createdAt: 'asc' },
+      }),
+    ]);
+
+    if (!facility) {
+      throw new NotFoundException('La sede del pedido no existe.');
+    }
+
+    const targetCoord = {
+      lat: Number(targetLeg.latitude),
+      lng: Number(targetLeg.longitude),
+    };
+    const facilityCoord = {
+      lat: Number(facility.latitude),
+      lng: Number(facility.longitude),
+    };
+
+    const result = evaluateDriverCandidates(
+      drivers.map((d) => {
+        const live = this.trackingGateway?.getLatestDriverLocation(d.id);
+        return {
+          driverId: d.id,
+          name: d.user.name,
+          phone: d.user.phone,
+          vehicle: d.vehicle,
+          plate: d.plate,
+          status: d.status,
+          facilityId: d.facilityId,
+          authorizedZoneIds: d.zones.map((z) => z.zoneId),
+          lat: live?.lat ?? (d.latitude !== null ? Number(d.latitude) : null),
+          lng: live?.lng ?? (d.longitude !== null ? Number(d.longitude) : null),
+          locationAtMs: live
+            ? live.timestamp
+            : d.locationAt
+              ? d.locationAt.getTime()
+              : null,
+          activeStops: d.legs.map((l) => ({
+            lat: Number(l.latitude),
+            lng: Number(l.longitude),
+          })),
+          activeLegsCount: d.legs.length,
+        };
+      }),
+      {
+        facilityId: order.facilityId,
+        zoneId: facility.zoneId,
+        target: targetCoord,
+        facilityCoord,
+        enforceDriverLimit: Boolean(policy?.enforceDriverLimit),
+        driverLimit: policy?.driverLimit ?? null,
+      },
+    );
+
+    // Refinar ETA/distancia real con Mapbox Directions (cacheado 5 min) para los top 3 con GPS fresco.
+    if (this.directions) {
+      const topFresh = result.candidates.filter((c) => c.gpsFresh).slice(0, 3);
+      await Promise.all(
+        topFresh.map(async (cand) => {
+          const row = drivers.find((d) => d.id === cand.driverId);
+          if (!row) return;
+          const live = this.trackingGateway?.getLatestDriverLocation(row.id);
+          const lat = live?.lat ?? (row.latitude !== null ? Number(row.latitude) : null);
+          const lng = live?.lng ?? (row.longitude !== null ? Number(row.longitude) : null);
+          if (lat === null || lng === null) return;
+          try {
+            const route = await this.directions!.getRouteWithGeometry(
+              { latitude: lat, longitude: lng },
+              { latitude: targetCoord.lat, longitude: targetCoord.lng },
+              { originBearing: live?.heading },
+            );
+            if (route) {
+              cand.distanceMeters = Math.round(route.distanceMeters);
+              cand.etaSeconds = Math.round(route.durationSeconds);
+            }
+          } catch {
+            // Conserva estimación Haversine si Mapbox falla.
+          }
+        }),
+      );
+    }
+
+    return {
+      orderId: order.id,
+      leg: legKind,
+      facilityId: order.facilityId,
+      zoneId: facility.zoneId,
+      candidates: result.candidates,
+      excluded: result.excluded,
+    };
+  }
+
   async cancel(user: AuthUser, id: string, dto: CancelOrderDto) {
     const order = await this.loadOrder(id);
     this.assertCanView(user, order);
@@ -741,6 +885,151 @@ export class OrdersService {
       });
       return this.view(await this.loadOrder(id, tx));
     });
+  }
+
+  /**
+   * El cliente cambia la franja (y si quiere la dirección) de la recogida o de la entrega.
+   * Solo antes de que el tramo inicie y fuera del corte de la política. Si el tramo ya tenía
+   * chofer y cambia el horario, el chofer se libera y la sede vuelve a asignar.
+   */
+  async reschedule(user: AuthUser, id: string, dto: RescheduleOrderDto) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+    if (user.role !== 'CLIENT') throw new ForbiddenException('Solo el cliente reprograma su pedido.');
+    this.assertVersion(order, dto.expectedVersion);
+
+    const isInbound = dto.leg === 'INBOUND';
+    const leg = order.legs.find((l) => l.kind === dto.leg)!;
+    const inbound = order.legs.find((l) => l.kind === 'INBOUND')!;
+    const outbound = order.legs.find((l) => l.kind === 'OUTBOUND');
+    const closedForOutbound: OrderStatus[] = [
+      'OUT_FOR_DELIVERY', 'ARRIVED_FOR_DELIVERY', 'DELIVERED', 'COMPLETED', 'CANCELLED', 'INCIDENT',
+    ];
+    const open = isInbound
+      ? (['PAYMENT_PENDING', 'CONFIRMED', 'PICKUP_ASSIGNED'] as OrderStatus[]).includes(order.status)
+      : !closedForOutbound.includes(order.status);
+    if (!open || !['PENDING', 'SCHEDULED'].includes(leg.status))
+      throw new ConflictException(
+        isInbound
+          ? 'La recogida ya inició o el pedido ya no admite reprogramarla.'
+          : 'La entrega ya inició o el pedido ya no admite reprogramarla.',
+      );
+
+    const policy = await this.policies.requireActive();
+    const cutoff = await this.policies.requireParam('cutoffMinutes', policy);
+    if (leg.slot && this.isPastCutoff(leg.slot, cutoff, policy))
+      throw new UnprocessableEntityException(
+        `Faltan menos de ${cutoff} minutos para la franja actual; ya no puede reprogramarse.`,
+      );
+
+    const context: TimeSlot['context'] = isInbound
+      ? 'DRIVER_PICKUP'
+      : order.mode === 'HOME_HOME' ? 'DRIVER_DELIVERY' : 'FACILITY_PICKUP';
+    const slotChanged = dto.slotId !== leg.slotId;
+    const slot = slotChanged
+      ? await this.usableSlot(this.prisma, dto.slotId, context, order.facilityId, policy.timezone)
+      : leg.slot!;
+    if (slotChanged && this.isPastCutoff(slot, cutoff, policy))
+      throw new UnprocessableEntityException(
+        `La nueva franja debe empezar con al menos ${cutoff} minutos de anticipación.`,
+      );
+    if (!isInbound && inbound.slot) this.assertDeliveryAfterPickup(inbound.slot, slot);
+
+    let address: { fullAddress: string; latitude: Prisma.Decimal; longitude: Prisma.Decimal } | null = null;
+    if (dto.addressId) {
+      if (!isInbound && order.mode !== 'HOME_HOME')
+        throw new BadRequestException('El retiro en sede no admite dirección de entrega.');
+      const customer = await this.customers.customerOf(user);
+      address = await this.ownedAddress(customer.id, dto.addressId);
+      const facility = await this.prisma.facility.findUniqueOrThrow({
+        where: { id: order.facilityId }, include: { zone: true },
+      });
+      this.assertCoverage(facility.zone.polygon, address);
+    }
+    const addressChanged = !!address && address.fullAddress !== leg.addressText;
+    if (!slotChanged && !addressChanged)
+      throw new BadRequestException('Elige un horario o una dirección distintos a los actuales.');
+
+    // Una nueva recogida que termina después de la entrega programada obliga a reprogramar la entrega.
+    const deliveryTooEarly =
+      isInbound && slotChanged && !!outbound?.slot &&
+      `${ymd(outbound.slot.date)} ${outbound.slot.startTime}` < `${ymd(slot.date)} ${slot.endTime}`;
+    // El chofer se eligió para el horario anterior: con otro horario la sede vuelve a asignar.
+    const unassign =
+      slotChanged && !!leg.driverId &&
+      (order.status === 'PICKUP_ASSIGNED' || order.status === 'DELIVERY_ASSIGNED');
+    const releasedDriverUserIds = unassign && leg.driver?.userId ? [leg.driver.userId] : [];
+    const nextStatus: OrderStatus = unassign
+      ? isInbound ? 'CONFIRMED' : 'READY_FOR_DELIVERY'
+      : order.status;
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { id, version: order.version, status: order.status },
+        data: { status: nextStatus, version: { increment: 1 } },
+      });
+      if (!count) throw new ConflictException('El pedido cambió; recárgalo e intenta de nuevo.');
+
+      const releaseLeg = async (legId: string) => {
+        const reservations = await tx.slotReservation.findMany({ where: { legId, active: true } });
+        for (const r of reservations) {
+          await this.slots.releaseCapacity(tx, r.slotId);
+          await this.slotReservationRelease(tx, r.id);
+        }
+      };
+      if (slotChanged) {
+        await releaseLeg(leg.id);
+        await this.slots.reserveCapacity(tx, slot.id);
+        await tx.slotReservation.create({ data: { slotId: slot.id, legId: leg.id } });
+      }
+      await tx.fulfillmentLeg.update({
+        where: { id: leg.id },
+        data: {
+          slotId: slot.id,
+          scheduledDate: slot.date,
+          status: 'SCHEDULED',
+          ...(unassign ? { driverId: null } : {}),
+          ...(address
+            ? { addressText: address.fullAddress, latitude: address.latitude, longitude: address.longitude }
+            : {}),
+        },
+      });
+      if (deliveryTooEarly && outbound) {
+        await releaseLeg(outbound.id);
+        await tx.fulfillmentLeg.update({
+          where: { id: outbound.id },
+          data: { slotId: null, scheduledDate: null, status: 'PENDING' },
+        });
+      }
+
+      const when = `${ymd(slot.date)} ${slot.startTime}-${slot.endTime}`;
+      const details = [
+        slotChanged ? `Nueva franja: ${when}.` : null,
+        addressChanged && address ? `Nueva dirección: ${address.fullAddress}.` : null,
+        deliveryTooEarly ? 'La entrega debe programarse de nuevo.' : null,
+        unassign ? 'El chofer asignado se liberó; la sede asignará uno para el nuevo horario.' : null,
+      ].filter(Boolean).join(' ');
+      await tx.orderEvent.create({
+        data: {
+          orderId: id, status: nextStatus,
+          title: isInbound ? 'Recogida reprogramada' : 'Entrega reprogramada',
+          description: details, actorId: user.id, actorRole: user.role,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          actorId: user.id, actorRole: user.role,
+          action: isInbound ? 'INBOUND_RESCHEDULED' : 'OUTBOUND_RESCHEDULED',
+          entity: 'Order', entityId: id, reason: details,
+          before: { status: order.status, slotId: leg.slotId, driverId: leg.driverId },
+          after: { status: nextStatus, slotId: slot.id, driverId: unassign ? null : leg.driverId },
+        },
+      });
+      return this.loadOrder(id, tx);
+    });
+    // Avisa también al chofer liberado: ya no figura en el pedido, pero debe quitarlo de su lista.
+    this.notifyOrderRealtimeStatus(updated, releasedDriverUserIds);
+    return this.view(updated);
   }
 
   private async slotReservationRelease(tx: Tx, id: string) {
@@ -1228,11 +1517,16 @@ export class OrdersService {
     this.notifyOrderRealtimeStatus(updated);
   }
 
-  private notifyOrderRealtimeStatus(order: FullOrder): void {
+  private notifyOrderRealtimeStatus(order: FullOrder, extraDriverUserIds: string[] = []): void {
     const activeLeg = liveTrackingLegFor(order.status);
-    const driverUserIds = order.legs
-      .map((l) => l.driver?.userId)
-      .filter((uid): uid is string => typeof uid === 'string');
+    const driverUserIds = [
+      ...new Set([
+        ...order.legs
+          .map((l) => l.driver?.userId)
+          .filter((uid): uid is string => typeof uid === 'string'),
+        ...extraDriverUserIds,
+      ]),
+    ];
 
     this.trackingGateway?.emitOrderStatusChanged({
       orderId: order.id,
