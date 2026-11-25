@@ -1531,6 +1531,7 @@ export class OrdersService {
     this.trackingGateway?.emitOrderStatusChanged({
       orderId: order.id,
       orderNumber: order.number,
+      facilityId: order.facilityId,
       status: order.status,
       activeLeg,
       customerUserId: order.customer.userId,
