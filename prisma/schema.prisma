@@ -330,11 +330,28 @@ model Driver {
   createdAt  DateTime     @default(now())
   updatedAt  DateTime     @updatedAt
 
-  zones     DriverZone[]
-  legs      FulfillmentLeg[]
-  incidents Incident[]
+  zones           DriverZone[]
+  legs            FulfillmentLeg[]
+  incidents       Incident[]
+  locationHistory DriverLocationPoint[]
 
   @@index([facilityId, status])
+}
+
+model DriverLocationPoint {
+  id         String   @id @default(uuid()) @db.Uuid
+  driverId   String   @db.Uuid
+  driver     Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  orderId    String?  @db.Uuid
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  latitude   Decimal  @db.Decimal(9, 6)
+  longitude  Decimal  @db.Decimal(9, 6)
+  heading    Float?
+  speed      Float?
+  recordedAt DateTime @default(now())
+
+  @@index([driverId, recordedAt])
+  @@index([orderId, recordedAt])
 }
 
 // ---------------------------------------------------------------- Organizacion y geografia
@@ -663,9 +680,10 @@ model Order {
   adjustments   PriceAdjustment[]
   ledger        LedgerEntry[]
   charges       CustomerCharge[]
-  incidents     Incident[]
-  messages      ChatMessage[]
-  notifications Notification[]
+  incidents       Incident[]
+  messages        ChatMessage[]
+  notifications   Notification[]
+  locationHistory DriverLocationPoint[]
 
   @@index([customerId, status])
   @@index([facilityId, status])

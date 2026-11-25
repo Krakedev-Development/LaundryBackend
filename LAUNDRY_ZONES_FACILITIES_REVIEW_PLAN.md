@@ -152,27 +152,77 @@ flowchart LR
 
 ---
 
-### Fase 5 — Apartado **Mapa Operativo** (`OperationalMapPage.tsx`)
+### Fase 5 — Apartado **Mapa Operativo** (`OperationalMapPage.tsx`) *(Completada)*
 
 **Archivos objetivo:**
-- `LaundryWeb/src/services/realtime/adminSocketService.ts` *(nuevo — cliente Socket.IO con JWT de `session.getToken()`)*
-- `LaundryWeb/src/hooks/useOperationalMapRealtime.ts` *(nuevo — equivalente a `useZoneMapRealtime.ts` de Anubis)*
-- `LaundryWeb/src/features/logistics/OperationalMapPage.tsx` *(refactorizar a Mapbox GL JS + tiempo real)*
-- `LaundryWeb/src/components/maps/OperationalMapboxView.tsx` *(nuevo — equivalente a `ZoneMapView.tsx` adaptado a Laundry)*
-- `LaundryWeb/src/features/logistics/zones/zonePopupHtml.ts` *(nuevo — popups seguros/sanitizados para zonas, sedes, choferes y pedidos)*
+- `LaundryWeb/src/services/realtime/adminSocketService.ts`
+- `LaundryWeb/src/hooks/useOperationalMapRealtime.ts`
+- `LaundryWeb/src/features/logistics/OperationalMapPage.tsx`
+- `LaundryWeb/src/components/maps/MapboxZoneMap.tsx`
 
-**Checklist de revisión e implementación:**
-1. **Conectar a datos reales en tiempo real (cero simulación):**
-   - Remover el subtítulo *"Escenario local de Samborondón. Movimiento de choferes simulado."* y el consumo de choferes simulados.
-   - Suscribirse a `admin:map:subscribe` al montar `OperationalMapPage` y actualizar marcadores de choferes y pedidos al instante vía `admin:map:driver-locations`, `admin:map:driver-offline` y `admin:map:order-updated`.
-   - Mantener polling de respaldo REST (`/zones/operational-snapshot`) solo con intervalo largo cuando el socket está conectado (120 s) y backoff exponencial si el socket se desconecta (patrón `ZoneMapView.tsx` de Anubis).
-2. **Capas y controles operativos en Mapbox GL JS:**
-   - **Zonas:** Polígonos GeoJSON activables/filtrables por zona, con popup de métricas (`sedes`, `choferes disponibles`, `pedidos activos`).
-   - **Sedes:** Marcadores diferenciados por estado (`Operativa` vs `Mantenimiento`) con popup de carga actual / capacidad kg/día.
-   - **Choferes:** Marcadores dinámicos por estado (`AVAILABLE`, `ON_SERVICE`, `BREAK`, `OFFLINE`), indicador de señal GPS desactualizada (`stale`), rotación opcional por `heading` y modo **"Seguir chofer"** (`easeTo` suave al centro del chofer seleccionado).
-   - **Pedidos e Incidencias:** Pines diferenciados para Recogidas activas (`pickup`), Entregas activas (`delivery`) e Incidencias abiertas (`incident`).
-3. **Corrección de navegación al hacer clic en pines/tabla:**
-   - Reemplazar `id.startsWith('SOL-') / 'FAC-' / 'DRV-'` por dispatch según `point.kind`, usando el UUID real del recurso.
+---
+
+### Fase 6 — Historial de Recorrido (PostgreSQL), Alertas de Chofer Inactivo y Filtro por Estado
+
+Esta fase completa los 3 puntos operativos restantes sobre la base ya implementada de Mapbox + WebSockets (`admin:map:*`), manteniendo el alcance estricto de `SUPERVISOR` a su sede/zona asignada.
+
+#### 6.1 Historial de recorrido persistido en PostgreSQL (`LaundryBackend`)
+
+**Modelo Prisma aditivo (`prisma/schema.prisma`):**
+```prisma
+model DriverLocationPoint {
+  id         String   @id @default(uuid()) @db.Uuid
+  driverId   String   @db.Uuid
+  driver     Driver   @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  orderId    String?  @db.Uuid
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  latitude   Decimal  @db.Decimal(9, 6)
+  longitude  Decimal  @db.Decimal(9, 6)
+  heading    Float?
+  speed      Float?
+  recordedAt DateTime @default(now())
+
+  @@index([driverId, recordedAt])
+  @@index([orderId, recordedAt])
+}
+```
+> [!IMPORTANT]
+> La migración Prisma (`prisma migrate dev --name add_driver_location_history`) es **100% aditiva** (no modifica ni borra tablas existentes) y se ejecutará únicamente con confirmación explícita.
+
+**Estrategia de escritura eficiente (sin saturar PostgreSQL):**
+- En `TrackingGateway.flushLocationWrites()` (batch cada 2 s) y `recordDriverLocationFromHttp()`:
+  - Mantener en memoria el último punto persistido por `driverId` (`lastPersistedPoint`).
+  - Insertar en `DriverLocationPoint` solo si han pasado **≥ 15 segundos** o el chofer se desplazó **≥ 25 metros** (Haversine) desde el último punto guardado.
+  - Asociar `orderId` automáticamente cuando el chofer tenga un tramo activo (`HEADING_TO_PICKUP`, `PICKED_UP`, `HEADING_TO_FACILITY`, `OUT_FOR_DELIVERY`).
+
+**Nuevo endpoint REST (`DriversController` / `DriversService`):**
+- `GET /drivers/:id/location-history?from=ISO&to=ISO&orderId=UUID&limit=500`
+  - Roles: `ADMIN` (cualquier chofer) y `SUPERVISOR` (**solo choferes de su `facilityId`**; si pertenece a otra sede responde `404`).
+  - Rango por defecto: últimas 6 horas (máximo 24 horas por consulta para proteger rendimiento).
+  - Respuesta: lista ordenada cronológicamente de `{ latitude, longitude, heading, speed, orderId, recordedAt }` + resumen (`totalPoints`, `distanceMeters`, `firstAt`, `lastAt`).
+
+#### 6.2 Alertas activas de chofer inactivo (`LaundryBackend` + `LaundryWeb`)
+
+**Reglas de detección (`src/tracking/driver-inactivity.util.ts`):**
+- Un chofer genera alerta activa cuando cumple cualquiera de estas condiciones:
+  1. **`NO_SIGNAL_ON_SERVICE` (Crítica):** `status === 'ON_SERVICE'` y han pasado **≥ 3 minutos** sin recibir señal GPS (`Date.now() - locationAt >= 180_000`).
+  2. **`NO_SIGNAL_AVAILABLE` (Advertencia):** `status === 'AVAILABLE'` y han pasado **≥ 5 minutos** sin recibir señal GPS (`Date.now() - locationAt >= 300_000`).
+  3. **`STATIONARY_ON_SERVICE` (Advertencia):** `status === 'ON_SERVICE'` con señal GPS reciente, pero sin moverse más de **30 metros** en los últimos **8 minutos** durante un tramo en ruta (`HEADING_TO_PICKUP` / `OUT_FOR_DELIVERY`).
+- **Emisión en tiempo real (`TrackingGateway`):**
+  - Evaluador periódico cada 30 s (`setInterval` con `.unref()`) sobre los choferes activos.
+  - Incluir `alerts: AdminMapDriverAlert[]` dentro de `admin:map:snapshot` y emitir cambios por `admin:map:driver-alerts` hacia `admin:map:all` (ADMIN) y `admin:map:facility:<facilityId>` (SUPERVISOR, filtrado solo a su sede).
+  - Incluir también `alerts` en el respaldo REST `GET /zones/operational-snapshot`.
+
+#### 6.3 UI en `LaundryWeb` (`OperationalMapPage.tsx` + `MapboxZoneMap.tsx`)
+
+1. **Filtro por estado de chofer (`MapLayersToolbar.tsx` / `OperationalMapPage.tsx`):**
+   - Selector adicional junto al filtro de zona: `Todos los estados`, `Disponible`, `En servicio`, `En descanso`, `Desconectado`, `Con alerta / Sin señal`.
+   - Aplica simultáneamente al mapa Mapbox, al selector de seguimiento (`DriverMapControls`) y a la tabla inferior (`MapLocations`).
+2. **Panel de alertas de chofer inactivo (`DriverInactivityAlerts.tsx`):**
+   - Banner/lista compacta encima del mapa (solo visible cuando existen alertas activas) mostrando nombre del chofer, severidad (`Crítica` / `Advertencia`), motivo (p. ej. *"Sin señal GPS hace 6 min · En servicio"*) y botón **"Ubicar"** que centra y selecciona al chofer en Mapbox.
+3. **Visor de historial de recorrido en Mapbox (`DriverRouteHistoryPanel.tsx` + `MapboxZoneMap.tsx`):**
+   - Controles para elegir un chofer + rango rápido (`Última hora`, `Hoy`, `Últimas 24 h`) y cargar `GET /drivers/:id/location-history`.
+   - Nueva capa GeoJSON en `MapboxZoneMap.tsx` (`history-route-source` / `history-route-line`) que dibuja la **polilínea histórica** en azul índigo con marcador de **Inicio** y **Fin**, distancia total recorrida y botón **"Limpiar recorrido"**.
 
 ---
 
@@ -184,27 +234,24 @@ flowchart LR
   - Validación de polígonos malformados o auto-intersecados.
   - `ActiveZonesSpatialIndexProvider`: hit de caché, invalidación por generación al crear/actualizar zona.
   - Reglas Zona ↔ Sede: rechazar sede fuera del polígono de su zona; rechazar edición de polígono que deje una sede activa fuera; rechazar desactivación de zona con sedes activas.
-- **Pruebas de WebSocket (`test/unit/tracking.test.ts`):**
-  - `admin:map:subscribe` permitido para `ADMIN`/`SUPERVISOR` y rechazado para `CLIENT`/`DRIVER`.
-  - Emisión throttled de `admin:map:driver-locations` y limpieza con `admin:map:driver-offline`.
+- **Pruebas de historial y alertas (`test/unit/driver-history-alerts.test.ts`):**
+  - Regla de muestreo (descarta puntos < 15 s y < 25 m; persiste al superar umbral).
+  - Detección de `NO_SIGNAL_ON_SERVICE`, `NO_SIGNAL_AVAILABLE` y `STATIONARY_ON_SERVICE`.
+  - Alcance de `SUPERVISOR`: solo recibe historial y alertas de choferes de su `facilityId`.
 - **Comandos:** `pnpm typecheck && pnpm build && pnpm test`.
 
 ### Frontend Web (`LaundryWeb`)
-- **Pruebas unitarias y de contratos:**
-  - Conversión `mapboxGeo` (`GeoJSON Polygon` ↔ `LatLng[]` del backend).
-  - Mappers de eventos `admin:map:*` → estado del mapa.
-  - Sanitización HTML de popups (`zonePopupHtml`).
 - **Prueba funcional end-to-end en navegador (`localhost:3000`):**
   1. **Sedes → Crear zona** en MapboxDraw → verificar persistencia en PostgreSQL tras recargar (`F5`).
-  2. **Sedes → Registrar sede** intentando colocar el pin fuera de la zona (debe bloquear en UI y API) y luego dentro de la zona (debe guardar y aparecer en la tarjeta y en el mapa).
-  3. **Sedes → Editar polígono de zona** intentando dejar la sede fuera (debe rechazar) y ampliando la zona (debe guardar e invalidar caché espacial).
-  4. **Mapa Operativo** → verificar carga de zonas, sedes y choferes reales; mover ubicación desde `LaundryDriver` y confirmar que el marcador del chofer se desplaza en vivo en `OperationalMapPage` sin recargar la página; probar filtros por zona, capas y botón *"Seguir chofer"*.
+  2. **Sedes → Registrar sede** dentro/fuera de zona y validar bloqueo en UI + API.
+  3. **Mapa Operativo** → verificar filtros por capa, zona y **estado de chofer**; confirmar aparición de **alerta de chofer inactivo** y botón "Ubicar"; consultar **historial de recorrido** de un chofer y verificar la polilínea histórica sobre Mapbox.
 - **Comandos:** `pnpm lint && pnpm build && pnpm test`.
 
 ---
 
 ## 5. Restricciones y Criterios de Calidad
-- **Sin cambios destructivos de esquema Prisma** salvo autorización explícita (el modelo actual `Zone`, `Facility`, `DriverZone` en `schema.prisma` ya soporta todo el flujo).
+- **Migración Prisma estrictamente aditiva** (`DriverLocationPoint`), aplicada solo tras aprobación del usuario.
 - **Sin emojis en la interfaz** (usar íconos de `lucide-react`).
 - **Servidor como única fuente de verdad** (sin datos simulados ni fallback silencioso a `localStorage` en escrituras).
 - **Modo claro limpio (`streets-v12`)** consistente en todo el panel web.
+- **Cero modificaciones fuera de `c:\LaundryCleanFresh`.**

@@ -20,6 +20,14 @@ import {
   validateDriverCoordinates,
   type LiveDriverLocation,
 } from './tracking.constants';
+import {
+  evaluateDriverInactivityAlerts,
+  haversineMeters,
+  shouldPersistHistoryPoint,
+  STATIONARY_RADIUS_METERS,
+  type AdminMapDriverAlert,
+  type PersistedHistorySample,
+} from './driver-inactivity.util';
 
 // Pedido que un chofer atiende con seguimiento en vivo hacia el cliente.
 interface TrackedLeg {
@@ -120,11 +128,13 @@ export interface AdminMapSnapshot {
   drivers: AdminMapDriverPayload[];
   orders: AdminMapOrderPayload[];
   incidents: AdminMapIncidentPayload[];
+  alerts: AdminMapDriverAlert[];
   generatedAt: string;
 }
 
 const ADMIN_MAP_ALL_ROOM = 'admin:map:all';
 const ADMIN_MAP_LOCATION_THROTTLE_MS = 2_000;
+const INACTIVITY_CHECK_INTERVAL_MS = 30_000;
 const NO_FACILITY_ID = '00000000-0000-0000-0000-000000000000';
 const PICKUP_MAP_STATUSES: readonly OrderStatus[] = [
   'CONFIRMED',
@@ -192,7 +202,10 @@ export class TrackingGateway
     string,
     { expiresAt: number; profile: CachedDriverProfile }
   >();
+  private readonly lastPersistedHistory = new Map<string, PersistedHistorySample>();
+  private readonly driverLastMoved = new Map<string, PersistedHistorySample>();
   private batchTimer: ReturnType<typeof setInterval> | null = null;
+  private inactivityTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private readonly config: ConfigService,
@@ -208,12 +221,22 @@ export class TrackingGateway
       }, 2_000);
       this.batchTimer.unref();
     }
+    if (!this.inactivityTimer) {
+      this.inactivityTimer = setInterval(() => {
+        void this.broadcastDriverInactivityAlerts();
+      }, INACTIVITY_CHECK_INTERVAL_MS);
+      this.inactivityTimer.unref();
+    }
   }
 
   onModuleDestroy(): void {
     if (this.batchTimer) {
       clearInterval(this.batchTimer);
       this.batchTimer = null;
+    }
+    if (this.inactivityTimer) {
+      clearInterval(this.inactivityTimer);
+      this.inactivityTimer = null;
     }
   }
 
@@ -709,12 +732,123 @@ export class TrackingGateway
       locationAt,
     });
 
+    // Actualizar marca de movimiento del chofer (para detectar chofer estacionado en ruta).
+    const prevMoved = this.driverLastMoved.get(driverId);
+    if (
+      !prevMoved ||
+      haversineMeters(prevMoved.lat, prevMoved.lng, fix.lat, fix.lng) >=
+        STATIONARY_RADIUS_METERS
+    ) {
+      this.driverLastMoved.set(driverId, {
+        lat: fix.lat,
+        lng: fix.lng,
+        timestamp: fix.timestamp,
+      });
+    }
+
+    // Persistir muestra de historial de recorrido en PostgreSQL (cada >= 15 s o >= 25 m).
+    const activeOrderId = activeLegs[0]?.orderId ?? hintOrderId ?? null;
+    void this.maybePersistHistoryPoint(driverId, fix, activeOrderId);
+
     // Emisión throttled al canal `admin:map:*` respetando alcance ADMIN vs SUPERVISOR por sede.
     const now = Date.now();
     const lastEmit = this.adminMapLastEmitAt.get(driverId) ?? 0;
     if (now - lastEmit >= ADMIN_MAP_LOCATION_THROTTLE_MS) {
       this.adminMapLastEmitAt.set(driverId, now);
       await this.emitDriverToAdminMap(driverId);
+    }
+  }
+
+  private async maybePersistHistoryPoint(
+    driverId: string,
+    fix: LiveDriverLocation,
+    orderId: string | null,
+  ): Promise<void> {
+    const sample: PersistedHistorySample = {
+      lat: fix.lat,
+      lng: fix.lng,
+      timestamp: fix.timestamp,
+    };
+    const prev = this.lastPersistedHistory.get(driverId);
+    if (!shouldPersistHistoryPoint(prev, sample)) return;
+    this.lastPersistedHistory.set(driverId, sample);
+
+    await this.prisma.driverLocationPoint
+      .create({
+        data: {
+          driverId,
+          orderId,
+          latitude: fix.lat,
+          longitude: fix.lng,
+          heading: fix.heading ?? null,
+          speed: fix.speed ?? null,
+          recordedAt: new Date(fix.timestamp),
+        },
+      })
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `Persistencia de historial GPS falló para ${driverId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
+  }
+
+  private async broadcastDriverInactivityAlerts(): Promise<void> {
+    if (!this.server) return;
+    try {
+      const drivers = await this.prisma.driver.findMany({
+        where: { status: { in: ['AVAILABLE', 'ON_SERVICE'] } },
+        include: {
+          user: { select: { name: true } },
+          facility: { select: { id: true, zoneId: true } },
+          legs: {
+            where: {
+              status: { notIn: ['COMPLETED', 'CANCELLED'] },
+              order: {
+                status: { in: ['HEADING_TO_PICKUP', 'OUT_FOR_DELIVERY'] },
+              },
+            },
+            select: { id: true },
+            take: 1,
+          },
+        },
+      });
+
+      const alerts = evaluateDriverInactivityAlerts(
+        drivers.map((d) => {
+          const live = this.driverLocations.get(d.id);
+          const moved = this.driverLastMoved.get(d.id);
+          return {
+            driverId: d.id,
+            name: d.user.name,
+            facilityId: d.facilityId,
+            zoneId: d.facility.zoneId,
+            status: d.status,
+            lat: live?.lat ?? (d.latitude !== null ? Number(d.latitude) : null),
+            lng: live?.lng ?? (d.longitude !== null ? Number(d.longitude) : null),
+            locationAtMs: live
+              ? live.timestamp
+              : d.locationAt
+                ? d.locationAt.getTime()
+                : null,
+            lastMovedAtMs: moved?.timestamp ?? null,
+            hasActiveRouteLeg: d.legs.length > 0,
+          };
+        }),
+      );
+
+      this.server.to(ADMIN_MAP_ALL_ROOM).emit('admin:map:driver-alerts', { alerts });
+
+      // Agrupar por sede para emitir a cada SUPERVISOR únicamente alertas de su sede.
+      const facilityIds = new Set(drivers.map((d) => d.facilityId));
+      for (const facId of facilityIds) {
+        this.server.to(adminFacilityRoom(facId)).emit('admin:map:driver-alerts', {
+          alerts: alerts.filter((a) => a.facilityId === facId),
+        });
+      }
+    } catch (err: unknown) {
+      this.logger.warn(
+        `Evaluación de inactividad de choferes falló: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
@@ -840,6 +974,27 @@ export class TrackingGateway
           };
         })
         .filter((x): x is AdminMapIncidentPayload => x !== null),
+      alerts: evaluateDriverInactivityAlerts(
+        drivers.map((d) => {
+          const live = this.driverLocations.get(d.id);
+          const moved = this.driverLastMoved.get(d.id);
+          return {
+            driverId: d.id,
+            name: d.user.name,
+            facilityId: d.facilityId,
+            zoneId: d.facility.zoneId,
+            status: d.status,
+            lat: live?.lat ?? (d.latitude !== null ? Number(d.latitude) : null),
+            lng: live?.lng ?? (d.longitude !== null ? Number(d.longitude) : null),
+            locationAtMs: live
+              ? live.timestamp
+              : d.locationAt
+                ? d.locationAt.getTime()
+                : null,
+            lastMovedAtMs: moved?.timestamp ?? null,
+          };
+        }),
+      ),
       generatedAt: new Date().toISOString(),
     };
   }

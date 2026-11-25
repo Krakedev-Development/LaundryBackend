@@ -1,12 +1,17 @@
+import { Type } from 'class-transformer';
 import {
+  IsDateString,
   IsIn,
+  IsInt,
   IsLatitude,
   IsLongitude,
   IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
 } from 'class-validator';
 
 export const DRIVER_STATUSES = ['AVAILABLE', 'ON_SERVICE', 'BREAK', 'OFFLINE'] as const;
@@ -32,4 +37,11 @@ export class UpdateLocationDto {
   @IsOptional() @IsNumber() heading?: number;
   @IsOptional() @IsNumber() speed?: number;
   @IsOptional() @IsIn(DRIVER_STATUSES) status?: DriverStatusValue;
+}
+
+export class LocationHistoryQuery {
+  @IsOptional() @IsDateString() from?: string;
+  @IsOptional() @IsDateString() to?: string;
+  @IsOptional() @IsUUID() orderId?: string;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(1000) limit?: number;
 }

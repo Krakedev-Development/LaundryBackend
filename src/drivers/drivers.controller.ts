@@ -14,6 +14,7 @@ import {
 } from '../common/decorators/auth.decorators';
 import {
   ListDriversQuery,
+  LocationHistoryQuery,
   UpdateDriverDto,
   UpdateLocationDto,
 } from './dto/drivers.dto';
@@ -40,6 +41,16 @@ export class DriversController {
   @Get()
   list(@CurrentUser() user: AuthUser, @Query() query: ListDriversQuery) {
     return this.drivers.list(user, query);
+  }
+
+  @Roles('ADMIN', 'SUPERVISOR')
+  @Get(':id/location-history')
+  locationHistory(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query() query: LocationHistoryQuery,
+  ) {
+    return this.drivers.locationHistory(user, id, query);
   }
 
   @Roles('ADMIN', 'SUPERVISOR')
