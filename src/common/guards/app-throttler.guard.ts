@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ExecutionContext, Injectable } from '@nestjs/common';
 import { ThrottlerGuard } from '@nestjs/throttler';
 
 interface TrackedRequest {
@@ -26,6 +26,13 @@ export function throttleTracker(req: TrackedRequest): string {
 
 @Injectable()
 export class AppThrottlerGuard extends ThrottlerGuard {
+  // El límite por IP aplica a las peticiones HTTP; los mensajes del WebSocket no tienen
+  // petición HTTP (la app del chofer envía su posición cada pocos segundos por el socket).
+  protected async shouldSkip(context: ExecutionContext): Promise<boolean> {
+    if (context.getType() !== 'http') return true;
+    return super.shouldSkip(context);
+  }
+
   protected getTracker(req: Record<string, any>): Promise<string> {
     return Promise.resolve(throttleTracker(req as TrackedRequest));
   }

@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import type { AuthUser } from '../common/decorators/auth.decorators';
@@ -32,6 +33,7 @@ import type {
   ScheduleOutboundDto,
   TransitionDto,
 } from './dto/orders.dto';
+import { $Enums } from '../generated/prisma/client';
 import {
   CLIENT_CANCELLABLE,
   findTransition,
@@ -42,6 +44,13 @@ import {
 } from './order-state-machine';
 import { computePricing } from './pricing';
 import { trackingLegFor } from './tracking';
+import {
+  isLiveCustomerTrackingStatus,
+  isLocationFresh,
+  liveTrackingLegFor,
+} from '../tracking/tracking.constants';
+import { TrackingGateway } from '../tracking/tracking.gateway';
+import { OrderEtaService } from '../tracking/order-eta.service';
 
 const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
@@ -82,6 +91,8 @@ export class OrdersService {
     private readonly wallet: WalletService,
     private readonly notifications: NotificationsService,
     private readonly points: PointsService,
+    @Optional() private readonly trackingGateway?: TrackingGateway,
+    @Optional() private readonly orderEta?: OrderEtaService,
   ) {}
 
   // ------------------------------------------------------------------ Creación
@@ -371,10 +382,12 @@ export class OrdersService {
       );
     if (user.role === 'DRIVER') this.assertAssignedDriver(user, order);
 
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       await this.applyTransition(tx, order, to, user, dto.note);
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    this.notifyOrderRealtimeStatus(updated);
+    return this.view(updated);
   }
 
   async assign(user: AuthUser, id: string, dto: AssignDriverDto) {
@@ -412,7 +425,7 @@ export class OrdersService {
         throw new ConflictException('El chofer alcanzó su límite de servicios activos.');
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const assignedOrder = await this.prisma.$transaction(async (tx) => {
       await tx.fulfillmentLeg.update({ where: { id: leg.id }, data: { driverId: driver.id } });
       await this.applyTransition(
         tx,
@@ -427,8 +440,10 @@ export class OrdersService {
           entity: 'Order', entityId: id, after: { leg: dto.leg, driverId: driver.id },
         },
       });
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    this.notifyOrderRealtimeStatus(assignedOrder);
+    return this.view(assignedOrder);
   }
 
   async scheduleOutbound(user: AuthUser, id: string, dto: ScheduleOutboundDto) {
@@ -507,7 +522,7 @@ export class OrdersService {
       }
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const cancelledOrder = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.order.updateMany({
         where: { id, version: order.version, status: order.status },
         data: { status: 'CANCELLED', cancelledAt: new Date(), version: { increment: 1 } },
@@ -559,8 +574,10 @@ export class OrdersService {
       });
       if (!isClient)
         await this.notifications.orderStatus(tx, order, 'CANCELLED');
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    this.notifyOrderRealtimeStatus(cancelledOrder);
+    return this.view(cancelledOrder);
   }
 
   // ------------------------------------------------------------------ Recogida fallida
@@ -584,7 +601,7 @@ export class OrdersService {
     const policy = await this.policies.requireActive();
     const fee = new D(await this.policies.requireParam('failedPickupFee', policy));
 
-    return this.prisma.$transaction(async (tx) => {
+    const failedOrder = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.order.updateMany({
         where: { id, version: order.version, status: order.status },
         data: { status: 'INCIDENT', version: { increment: 1 } },
@@ -645,8 +662,10 @@ export class OrdersService {
           entity: 'Order', entityId: id, reason,
         },
       });
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    this.notifyOrderRealtimeStatus(failedOrder);
+    return this.view(failedOrder);
   }
 
   // La sede programa una nueva franja de recogida. Si la entrega ya programada quedaría antes
@@ -752,7 +771,7 @@ export class OrdersService {
     if (['CANCELLED', 'COMPLETED'].includes(order.status))
       throw new ConflictException('El pedido ya no admite pagos.');
 
-    return this.prisma.$transaction(async (tx) => {
+    const paidOrder = await this.prisma.$transaction(async (tx) => {
       await this.wallet.lockCustomer(tx, order.customerId);
       const outstanding = new D(order.total).sub(await this.paidAmount(tx, id));
       if (outstanding.lte(0)) throw new ConflictException('El pedido no tiene saldo pendiente.');
@@ -777,8 +796,10 @@ export class OrdersService {
         await this.bump(tx, order, user, 'Pago de diferencia recibido');
         await tx.order.update({ where: { id }, data: { paymentStatus: 'PAID' } });
       }
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    if (paidOrder.status !== order.status) this.notifyOrderRealtimeStatus(paidOrder);
+    return this.view(paidOrder);
   }
 
   // Confirmación manual del personal (transferencia o pago fuera de la app). El dinero externo
@@ -796,7 +817,7 @@ export class OrdersService {
       throw new ConflictException('El pedido no tiene un pago pendiente por confirmar.');
 
     const note = dto.note?.trim() || 'Pago confirmado por administración';
-    return this.prisma.$transaction(async (tx) => {
+    const confirmedOrder = await this.prisma.$transaction(async (tx) => {
       await this.wallet.lockCustomer(tx, order.customerId);
       const outstanding = new D(order.total).sub(await this.paidAmount(tx, id));
       if (difference && outstanding.lte(0))
@@ -835,8 +856,10 @@ export class OrdersService {
           after: { amount: outstanding.toString() },
         },
       });
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    if (confirmedOrder.status !== order.status) this.notifyOrderRealtimeStatus(confirmedOrder);
+    return this.view(confirmedOrder);
   }
 
   // Cierra el pedido entregado. Requiere que no quede saldo por cobrar.
@@ -848,7 +871,7 @@ export class OrdersService {
     this.assertVersion(order, dto.expectedVersion);
     if (order.status !== 'DELIVERED')
       throw new ConflictException('Solo se cierra un pedido entregado.');
-    return this.prisma.$transaction(async (tx) => {
+    const closedOrder = await this.prisma.$transaction(async (tx) => {
       const outstanding = new D(order.total).sub(await this.paidAmount(tx, id));
       if (outstanding.gt(0))
         throw new ConflictException(
@@ -856,8 +879,10 @@ export class OrdersService {
         );
       await this.applyTransition(tx, order, 'COMPLETED', user, 'Pedido cerrado');
       await this.points.accrueForOrder(tx, order);
-      return this.view(await this.loadOrder(id, tx));
+      return this.loadOrder(id, tx);
     });
+    this.notifyOrderRealtimeStatus(closedOrder);
+    return this.view(closedOrder);
   }
 
   // Carga el pedido validando que el usuario pueda verlo (para módulos colaboradores).
@@ -1050,10 +1075,11 @@ export class OrdersService {
     return (!p.validFrom || p.validFrom <= now) && (!p.validUntil || p.validUntil >= now);
   }
 
+  // Todos los estados del modelo, también los que no salen de una transición (INCIDENT,
+  // CANCELLED): la sede necesita listar los pedidos retenidos.
   private parseStatus(s: string): OrderStatus {
-    const known = new Set<string>(TRANSITIONS.flatMap((t) => [t.from, t.to]));
-    known.add('CANCELLED');
-    if (!known.has(s)) throw new BadRequestException('Estado desconocido.');
+    if (!(Object.values($Enums.OrderStatus) as string[]).includes(s))
+      throw new BadRequestException('Estado desconocido.');
     return s as OrderStatus;
   }
 
@@ -1122,12 +1148,31 @@ export class OrdersService {
         })
       : null;
 
+    const live = driver ? this.trackingGateway?.getLatestDriverLocation(driver.id) : null;
+    const useLive = !!live && isLocationFresh(live.timestamp);
+    const driverLat = useLive
+      ? live.lat
+      : driver?.latitude === null || driver?.latitude === undefined
+        ? null
+        : Number(driver.latitude);
+    const driverLng = useLive
+      ? live.lng
+      : driver?.longitude === null || driver?.longitude === undefined
+        ? null
+        : Number(driver.longitude);
+    const driverLocationAt = useLive
+      ? new Date(live.timestamp).toISOString()
+      : driver?.locationAt
+        ? driver.locationAt.toISOString()
+        : null;
+
     return {
       orderId: order.id,
       orderNumber: order.number,
       status: order.status,
       mode: order.mode,
       activeLeg,
+      isLiveTrackingActive: isLiveCustomerTrackingStatus(order.status),
       customerAddress: {
         text: addressLeg.addressText,
         latitude: Number(addressLeg.latitude),
@@ -1148,12 +1193,57 @@ export class OrdersService {
             plate: driver.plate,
             vehicle: driver.vehicle,
             status: driver.status,
-            latitude: driver.latitude === null ? null : Number(driver.latitude),
-            longitude: driver.longitude === null ? null : Number(driver.longitude),
-            locationAt: driver.locationAt ? driver.locationAt.toISOString() : null,
+            latitude: driverLat,
+            longitude: driverLng,
+            heading: useLive ? (live.heading ?? null) : null,
+            speed: useLive ? (live.speed ?? null) : null,
+            locationAt: driverLocationAt,
           }
         : null,
     };
+  }
+
+  async route(user: AuthUser, id: string) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+    if (!this.orderEta) {
+      throw new BadRequestException('Servicio de rutas no disponible.');
+    }
+    this.orderEta.consumeUserBudget(user.id);
+    return this.orderEta.getRouteForOrder(id);
+  }
+
+  async eta(user: AuthUser, id: string) {
+    const order = await this.loadOrder(id);
+    this.assertCanView(user, order);
+    if (!this.orderEta) {
+      throw new BadRequestException('Servicio de ETA no disponible.');
+    }
+    this.orderEta.consumeUserBudget(user.id);
+    return this.orderEta.getEtaForOrder(id);
+  }
+
+  async notifyStatusChangedById(orderId: string): Promise<void> {
+    const updated = await this.loadOrder(orderId);
+    this.notifyOrderRealtimeStatus(updated);
+  }
+
+  private notifyOrderRealtimeStatus(order: FullOrder): void {
+    const activeLeg = liveTrackingLegFor(order.status);
+    const driverUserIds = order.legs
+      .map((l) => l.driver?.userId)
+      .filter((uid): uid is string => typeof uid === 'string');
+
+    this.trackingGateway?.emitOrderStatusChanged({
+      orderId: order.id,
+      orderNumber: order.number,
+      status: order.status,
+      activeLeg,
+      customerUserId: order.customer.userId,
+      driverUserIds,
+      updatedAt: new Date().toISOString(),
+    });
+    this.orderEta?.syncTrackingForStatus(order.id, order.status);
   }
 
   private view(order: FullOrder) {

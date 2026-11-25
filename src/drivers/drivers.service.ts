@@ -3,10 +3,12 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import type { AuthUser } from '../common/decorators/auth.decorators';
 import type { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 import type {
   ListDriversQuery,
   UpdateDriverDto,
@@ -31,7 +33,10 @@ const NO_FACILITY = '00000000-0000-0000-0000-000000000000';
 
 @Injectable()
 export class DriversService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly tracking?: TrackingGateway,
+  ) {}
 
   // ---- Gestión (administrador y supervisor)
 
@@ -64,7 +69,7 @@ export class DriversService {
       if (!facility || !facility.active)
         throw new NotFoundException('La sede no existe o está inactiva.');
     }
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const driver = await tx.driver.update({
         where: { id },
         data: {
@@ -87,6 +92,9 @@ export class DriversService {
       });
       return this.view(driver);
     });
+    // Sede, vehículo, placa o estado cambiaron: el mapa operativo vuelve a leerlos.
+    this.tracking?.invalidateDriverProfile(id);
+    return updated;
   }
 
   // ---- Perfil y telemetría del chofer autenticado
@@ -113,6 +121,21 @@ export class DriversService {
       },
       include: DRIVER_INCLUDE,
     });
+    if (dto.status) this.tracking?.invalidateDriverProfile(driver.id);
+    if (hasLat && dto.latitude !== undefined && dto.longitude !== undefined) {
+      void this.tracking?.recordDriverLocationFromHttp(
+        driver.id,
+        dto.latitude,
+        dto.longitude,
+        dto.heading,
+        dto.speed,
+      );
+    }
+    if (dto.status === 'OFFLINE') {
+      this.tracking?.emitDriverOfflineToAdminMap(driver.id, driver.facilityId);
+    } else if (dto.status && !hasLat) {
+      void this.tracking?.emitDriverProfileToAdminMap(driver.id);
+    }
     return this.view(driver);
   }
 

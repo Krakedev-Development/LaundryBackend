@@ -3,18 +3,23 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { toPublic } from '../auth/auth.service';
 import type { AuthUser } from '../common/decorators/auth.decorators';
 import { PrismaService } from '../prisma/prisma.service';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 import type { CreateDriverDto, CreateStaffDto } from './dto/users.dto';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class UsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly tracking?: TrackingGateway,
+  ) {}
 
   async createDriver(actor: AuthUser, dto: CreateDriverDto) {
     const email = dto.email.trim().toLowerCase();
@@ -144,7 +149,7 @@ export class UsersService {
       const previous = (suspension?.before as { status?: string } | null)?.status;
       if (previous === 'PASSWORD_CHANGE_REQUIRED') next = previous;
     }
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({
         where: { id },
         data: { status: next },
@@ -168,6 +173,9 @@ export class UsersService {
       });
       return toPublic(updated);
     });
+    if (dto.status === 'SUSPENDED')
+      void this.tracking?.disconnectUser(id, 'Usuario no encontrado o suspendido');
+    return result;
   }
 
   // Nueva contraseña temporal: la cuenta debe cambiarla en el siguiente ingreso.
@@ -176,7 +184,7 @@ export class UsersService {
     if (user.status === 'SUSPENDED')
       throw new ConflictException('Reactiva la cuenta antes de restablecer su contraseña.');
     const passwordHash = await argon2.hash(dto.temporaryPassword);
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const updated = await tx.user.update({
         where: { id },
         data: { passwordHash, status: 'PASSWORD_CHANGE_REQUIRED' },
@@ -196,6 +204,8 @@ export class UsersService {
       });
       return toPublic(updated);
     });
+    void this.tracking?.disconnectUser(id, 'Debes cambiar tu contraseña temporal antes de continuar.');
+    return result;
   }
 
   // Actividad de una cuenta del personal o chofer: une el registro de auditoría, los

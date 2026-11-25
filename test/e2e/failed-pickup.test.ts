@@ -52,6 +52,9 @@ describe('recogida fallida', () => {
 
     const res = await failed(id).expect(201);
     assert.equal(res.body.status, 'INCIDENT');
+    // La sede lista los pedidos retenidos por estado (Planta, Incidencias).
+    const held = await t.http.get(`${api}/orders?status=INCIDENT`).set(bearer(w.admin)).expect(200);
+    assert.ok(held.body.data.some((o: { id: string }) => o.id === id));
 
     const leg = await t.prisma.fulfillmentLeg.findFirstOrThrow({ where: { orderId: id, kind: 'INBOUND' } });
     assert.deepEqual([leg.status, leg.driverId, leg.slotId], ['PENDING', null, null]);

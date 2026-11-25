@@ -74,6 +74,7 @@ export class AdjustmentsService {
       }
       await this.orders.applyTransition(tx, order, 'INSPECTION', user, 'Peso registrado');
     });
+    await this.orders.notifyStatusChangedById(orderId);
     return this.orders.viewFor(user, orderId);
   }
 
@@ -184,6 +185,7 @@ export class AdjustmentsService {
       }
       await this.finalize(tx, order, user);
     });
+    await this.orders.notifyStatusChangedById(orderId);
     return this.orders.viewFor(user, orderId);
   }
 

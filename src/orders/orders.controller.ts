@@ -65,6 +65,21 @@ export class OrdersController {
     return this.orders.tracking(user, id);
   }
 
+  // El origen de la ruta es siempre la última posición conocida del chofer. Las coordenadas
+  // que envíe quien consulta (driverLat, driverLng, driverHeading) se ignoran: nadie puede
+  // pedir rutas a Mapbox desde un origen arbitrario.
+  @Roles('CLIENT', 'ADMIN', 'SUPERVISOR', 'DRIVER')
+  @Get(':id/route')
+  route(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.orders.route(user, id);
+  }
+
+  @Roles('CLIENT', 'ADMIN', 'SUPERVISOR', 'DRIVER')
+  @Get(':id/eta')
+  eta(@CurrentUser() user: AuthUser, @Param('id', ParseUUIDPipe) id: string) {
+    return this.orders.eta(user, id);
+  }
+
   @Post(':id/transitions')
   transition(
     @CurrentUser() user: AuthUser,
