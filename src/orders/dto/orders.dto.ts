@@ -76,6 +76,13 @@ export class ScheduleInboundDto extends VersionedDto {
   @IsUUID() slotId: string;
 }
 
+// El cliente cambia la franja (y opcionalmente la dirección) de un tramo que aún no inició.
+export class RescheduleOrderDto extends VersionedDto {
+  @IsIn(['INBOUND', 'OUTBOUND']) leg: 'INBOUND' | 'OUTBOUND';
+  @IsUUID() slotId: string;
+  @IsOptional() @IsUUID() addressId?: string;
+}
+
 export class TransitionDto extends VersionedDto {
   @IsString() @IsNotEmpty() to: string;
   @IsOptional() @IsString() @MaxLength(300) note?: string;

@@ -404,6 +404,31 @@ describe('estado que sobrevive a un reinicio', () => {
     }).expect(201);
     await Promise.all([onPhone, onTablet]);
   });
+
+  it('la web recibe los cambios de estado de su alcance sin suscribirse al pedido', async () => {
+    const zone = await t.prisma.facility.findUniqueOrThrow({ where: { id: w.facilityId } });
+    const otherFacility = await post(w.admin, '/facilities', {
+      zoneId: zone.zoneId, name: 'Sede ajena', address: 'Av 3', latitude: 6, longitude: 6,
+    }).expect(201);
+    const sup3 = await createUser(t, { email: 'rt-sup3@test.local', role: 'SUPERVISOR' });
+    await t.prisma.user.update({ where: { id: sup3.id }, data: { facilityId: otherFacility.body.id } });
+
+    const c = await w.newClient('rt-staff@test.local');
+    await w.credit(c.customerId, 100);
+    const id = await w.order(c);
+    const admin = await connected(w.admin);
+    const sup = await connected(w.supervisor);
+    const foreign = await connected(await login(t, 'rt-sup3@test.local'));
+    const foreignSeen = record<{ orderId: string }>(foreign, 'order:status:changed');
+    const onAdmin = next<{ orderId: string; facilityId: string }>(admin, 'order:status:changed', (d) => d.orderId === id);
+    const onSup = next<{ orderId: string; status: string }>(sup, 'order:status:changed', (d) => d.orderId === id);
+
+    await post(c.token, `/orders/${id}/pay`, { expectedVersion: 1 }).expect(201);
+    assert.equal((await onAdmin).facilityId, w.facilityId);
+    assert.equal((await onSup).status, 'CONFIRMED');
+    await pause(200);
+    assert.deepEqual(foreignSeen.filter((d) => d.orderId === id), []);
+  });
 });
 
 describe('mapa operativo de la web', () => {

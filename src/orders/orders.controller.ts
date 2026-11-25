@@ -22,6 +22,7 @@ import {
   CreateOrderDto,
   FailedPickupDto,
   ListOrdersQuery,
+  RescheduleOrderDto,
   ScheduleInboundDto,
   ScheduleOutboundDto,
   TransitionDto,
@@ -90,6 +91,18 @@ export class OrdersController {
   }
 
   @Roles('ADMIN', 'SUPERVISOR')
+  @Get(':id/driver-candidates')
+  driverCandidates(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('leg') leg?: string,
+  ) {
+    const normalizedLeg =
+      leg === 'OUTBOUND' ? 'OUTBOUND' : leg === 'INBOUND' ? 'INBOUND' : undefined;
+    return this.orders.driverCandidates(user, id, normalizedLeg);
+  }
+
+  @Roles('ADMIN', 'SUPERVISOR')
   @Post(':id/assign')
   assign(
     @CurrentUser() user: AuthUser,
@@ -129,6 +142,17 @@ export class OrdersController {
     @Body() dto: ScheduleOutboundDto,
   ) {
     return this.orders.scheduleOutbound(user, id, dto);
+  }
+
+  // El cliente reprograma la recogida o la entrega mientras el tramo no haya iniciado.
+  @Roles('CLIENT')
+  @Put(':id/reschedule')
+  reschedule(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RescheduleOrderDto,
+  ) {
+    return this.orders.reschedule(user, id, dto);
   }
 
   @Roles('CLIENT', 'ADMIN', 'SUPERVISOR')

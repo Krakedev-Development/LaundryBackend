@@ -156,6 +156,13 @@ function adminFacilityRoom(facilityId: string): string {
   return `admin:map:facility:${facilityId}`;
 }
 
+// Personal de la web: el administrador recibe los avisos de todas las sedes y el supervisor solo
+// los de la suya (la misma regla que aplica el HTTP).
+const STAFF_ALL_ROOM = 'staff:all';
+function staffFacilityRoom(facilityId: string): string {
+  return `staff:facility:${facilityId}`;
+}
+
 export interface OrderEtaBroadcast {
   orderId: string;
   activeLeg: 'INBOUND' | 'OUTBOUND';
@@ -295,6 +302,9 @@ export class TrackingGateway
       if (user.role === 'ADMIN' || user.role === 'SUPERVISOR') {
         void client.join('admins');
       }
+      if (user.role === 'ADMIN') await client.join(STAFF_ALL_ROOM);
+      if (user.role === 'SUPERVISOR' && user.facilityId)
+        await client.join(staffFacilityRoom(user.facilityId));
 
       client.emit('authenticated', { userId: user.id, role: user.role });
     } catch (error) {
@@ -502,6 +512,11 @@ export class TrackingGateway
     for (const driverUserId of payload.driverUserIds ?? []) {
       this.emitToUser(driverUserId, 'order:status:changed', wire);
     }
+    // Listas y detalle de pedidos de la web: se recargan al recibirlo.
+    const staffWire = { ...wire, facilityId: payload.facilityId ?? null };
+    this.server.to(STAFF_ALL_ROOM).emit('order:status:changed', staffWire);
+    if (payload.facilityId)
+      this.server.to(staffFacilityRoom(payload.facilityId)).emit('order:status:changed', staffWire);
 
     if (
       payload.status === 'ARRIVED_FOR_PICKUP' ||
