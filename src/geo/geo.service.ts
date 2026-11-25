@@ -22,6 +22,7 @@ import {
   validatePolygonGeometry,
   type LatLng,
 } from './geo-spatial.util';
+import { evaluateDriverInactivityAlerts } from '../tracking/driver-inactivity.util';
 
 export type { LatLng };
 
@@ -291,6 +292,33 @@ export class GeoService {
       }),
     ]);
 
+    const driverRows = drivers.map((d) => ({
+      driverId: d.id,
+      name: d.user.name,
+      phone: d.user.phone,
+      vehicle: d.vehicle,
+      plate: d.plate,
+      status: d.status,
+      facilityId: d.facilityId,
+      zoneId: d.facility.zoneId,
+      lat: d.latitude !== null ? Number(d.latitude) : null,
+      lng: d.longitude !== null ? Number(d.longitude) : null,
+      locationAt: d.locationAt ? d.locationAt.toISOString() : null,
+    }));
+
+    const alerts = evaluateDriverInactivityAlerts(
+      drivers.map((d) => ({
+        driverId: d.id,
+        name: d.user.name,
+        facilityId: d.facilityId,
+        zoneId: d.facility.zoneId,
+        status: d.status,
+        lat: d.latitude !== null ? Number(d.latitude) : null,
+        lng: d.longitude !== null ? Number(d.longitude) : null,
+        locationAtMs: d.locationAt ? d.locationAt.getTime() : null,
+      })),
+    );
+
     return {
       scope: isSupervisor ? 'SUPERVISOR' : 'ADMIN',
       scopedFacilityId: isSupervisor ? (actor.facilityId ?? null) : null,
@@ -300,19 +328,8 @@ export class GeoService {
         latitude: Number(f.latitude),
         longitude: Number(f.longitude),
       })),
-      drivers: drivers.map((d) => ({
-        driverId: d.id,
-        name: d.user.name,
-        phone: d.user.phone,
-        vehicle: d.vehicle,
-        plate: d.plate,
-        status: d.status,
-        facilityId: d.facilityId,
-        zoneId: d.facility.zoneId,
-        lat: d.latitude !== null ? Number(d.latitude) : null,
-        lng: d.longitude !== null ? Number(d.longitude) : null,
-        locationAt: d.locationAt ? d.locationAt.toISOString() : null,
-      })),
+      drivers: driverRows,
+      alerts,
       orders: orders
         .map((o) => {
           const isDelivery = (DELIVERY_MAP_STATUSES as readonly string[]).includes(o.status);

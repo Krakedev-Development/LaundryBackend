@@ -9,8 +9,10 @@ import type { AuthUser } from '../common/decorators/auth.decorators';
 import type { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { TrackingGateway } from '../tracking/tracking.gateway';
+import { haversineMeters } from '../tracking/driver-inactivity.util';
 import type {
   ListDriversQuery,
+  LocationHistoryQuery,
   UpdateDriverDto,
   UpdateLocationDto,
 } from './dto/drivers.dto';
@@ -56,6 +58,80 @@ export class DriversService {
 
   async get(user: AuthUser, id: string) {
     return this.view(await this.scoped(user, id));
+  }
+
+  async locationHistory(user: AuthUser, id: string, q: LocationHistoryQuery) {
+    const driver = await this.scoped(user, id);
+    const maxWindowMs = 24 * 60 * 60 * 1000;
+    const defaultWindowMs = 6 * 60 * 60 * 1000;
+
+    const toDate = q.to ? new Date(q.to) : new Date();
+    const rawFrom = q.from
+      ? new Date(q.from)
+      : new Date(toDate.getTime() - defaultWindowMs);
+    const fromDate =
+      toDate.getTime() - rawFrom.getTime() > maxWindowMs
+        ? new Date(toDate.getTime() - maxWindowMs)
+        : rawFrom;
+
+    if (fromDate.getTime() > toDate.getTime()) {
+      throw new BadRequestException(
+        'La fecha inicial no puede ser posterior a la fecha final.',
+      );
+    }
+
+    const limit = Math.min(Math.max(q.limit ?? 500, 1), 1000);
+    const rows = await this.prisma.driverLocationPoint.findMany({
+      where: {
+        driverId: driver.id,
+        ...(q.orderId ? { orderId: q.orderId } : {}),
+        recordedAt: { gte: fromDate, lte: toDate },
+      },
+      orderBy: { recordedAt: 'asc' },
+      take: limit,
+      select: {
+        id: true,
+        orderId: true,
+        latitude: true,
+        longitude: true,
+        heading: true,
+        speed: true,
+        recordedAt: true,
+      },
+    });
+
+    const points = rows.map((r) => ({
+      id: r.id,
+      orderId: r.orderId,
+      lat: Number(r.latitude),
+      lng: Number(r.longitude),
+      heading: r.heading,
+      speed: r.speed,
+      recordedAt: r.recordedAt.toISOString(),
+    }));
+
+    let distanceMeters = 0;
+    for (let i = 1; i < points.length; i++) {
+      distanceMeters += haversineMeters(
+        points[i - 1].lat,
+        points[i - 1].lng,
+        points[i].lat,
+        points[i].lng,
+      );
+    }
+
+    return {
+      driverId: driver.id,
+      driverName: driver.user.name,
+      facilityId: driver.facilityId,
+      from: fromDate.toISOString(),
+      to: toDate.toISOString(),
+      totalPoints: points.length,
+      distanceMeters: Math.round(distanceMeters),
+      firstAt: points[0]?.recordedAt ?? null,
+      lastAt: points[points.length - 1]?.recordedAt ?? null,
+      points,
+    };
   }
 
   async update(user: AuthUser, id: string, dto: UpdateDriverDto) {
