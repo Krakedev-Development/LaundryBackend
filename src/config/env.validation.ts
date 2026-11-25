@@ -45,6 +45,8 @@ export class EnvironmentVariables {
 
   // Token de Mapbox Directions API (opcional; sin él usa OSRM/Haversine de respaldo).
   @IsOptional() @IsString() MAPBOX_ACCESS_TOKEN?: string;
+  // OSRM de respaldo (opcional). Vacío en producción salvo que exista un OSRM propio.
+  @IsOptional() @IsString() OSRM_URL?: string;
 }
 
 export function validateEnv(raw: Record<string, unknown>): EnvironmentVariables {

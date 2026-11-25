@@ -23,6 +23,9 @@ function useTestEnvironment(): void {
   process.env.JWT_REFRESH_TTL_SECONDS = '3600';
   // Nunca se envían correos reales desde las pruebas: quedan en el buzón en memoria.
   process.env.SMTP_HOST = '';
+  // Las pruebas nunca consultan proveedores de rutas reales.
+  process.env.MAPBOX_ACCESS_TOKEN = '';
+  process.env.OSRM_URL = '';
 }
 
 export const ADMIN_PASSWORD = 'AdminTest2026ok';

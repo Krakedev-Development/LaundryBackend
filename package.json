@@ -62,6 +62,7 @@
     "@types/pg": "^8.23.1",
     "@types/supertest": "^7.2.1",
     "prisma": "7.10.1",
+    "socket.io-client": "4.8.1",
     "supertest": "^7.3.1",
     "ts-node": "^10.9.2",
     "typescript": "^6.0.3"

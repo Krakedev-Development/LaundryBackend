@@ -18,6 +18,9 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
   }
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
+    // Los mensajes del WebSocket no traen cabeceras HTTP: el gateway valida el token al
+    // conectar (TrackingGateway.handleConnection) y cada manejador revisa el rol del socket.
+    if (ctx.getType() !== 'http') return true;
     const targets = [ctx.getHandler(), ctx.getClass()];
     if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, targets)) {
       const req = ctx.switchToHttp().getRequest();

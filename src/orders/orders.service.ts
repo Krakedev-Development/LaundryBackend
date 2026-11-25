@@ -1203,17 +1203,14 @@ export class OrdersService {
     };
   }
 
-  async route(
-    user: AuthUser,
-    id: string,
-    query: { driverLat?: number; driverLng?: number; driverHeading?: number },
-  ) {
+  async route(user: AuthUser, id: string) {
     const order = await this.loadOrder(id);
     this.assertCanView(user, order);
     if (!this.orderEta) {
       throw new BadRequestException('Servicio de rutas no disponible.');
     }
-    return this.orderEta.getRouteForOrder(id, query);
+    this.orderEta.consumeUserBudget(user.id);
+    return this.orderEta.getRouteForOrder(id);
   }
 
   async eta(user: AuthUser, id: string) {
@@ -1222,6 +1219,7 @@ export class OrdersService {
     if (!this.orderEta) {
       throw new BadRequestException('Servicio de ETA no disponible.');
     }
+    this.orderEta.consumeUserBudget(user.id);
     return this.orderEta.getEtaForOrder(id);
   }
 

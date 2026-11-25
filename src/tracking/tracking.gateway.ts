@@ -21,6 +21,32 @@ import {
   type LiveDriverLocation,
 } from './tracking.constants';
 
+// Pedido que un chofer atiende con seguimiento en vivo hacia el cliente.
+interface TrackedLeg {
+  orderId: string;
+  kind: 'INBOUND' | 'OUTBOUND';
+  status: OrderStatus;
+  customerUserId: string;
+}
+
+// Datos del chofer para el mapa operativo; la posición se toma de la memoria si es reciente.
+interface CachedDriverProfile {
+  driverId: string;
+  name: string;
+  phone: string | null;
+  vehicle: string | null;
+  plate: string | null;
+  status: string;
+  facilityId: string;
+  zoneId: string;
+  latitude: number | null;
+  longitude: number | null;
+  locationAt: string | null;
+}
+
+const TRACKED_LEGS_TTL_MS = 10_000;
+const DRIVER_PROFILE_TTL_MS = 60_000;
+
 interface AuthenticatedSocket extends Socket {
   userId?: string;
   userRole?: UserRole;
@@ -112,6 +138,10 @@ const DELIVERY_MAP_STATUSES: readonly OrderStatus[] = [
   'ARRIVED_FOR_DELIVERY',
 ];
 
+function userRoom(userId: string): string {
+  return `user:${userId}`;
+}
+
 function adminFacilityRoom(facilityId: string): string {
   return `admin:map:facility:${facilityId}`;
 }
@@ -132,8 +162,8 @@ export interface OrderEtaBroadcast {
   updatedAt: string;
 }
 
+// Los orígenes permitidos (CORS) los fija ConfiguredIoAdapter con CORS_ORIGINS.
 @WebSocketGateway({
-  cors: { origin: true, credentials: true },
   transports: ['websocket', 'polling'],
   pingInterval: 25_000,
   pingTimeout: 20_000,
@@ -147,10 +177,21 @@ export class TrackingGateway
   server?: Server;
 
   private readonly logger = new Logger(TrackingGateway.name);
-  private readonly userSockets = new Map<string, Set<string>>();
   private readonly driverLocations = new Map<string, LiveDriverLocation>();
   private readonly locationWriteQueue = new Map<string, LiveDriverLocation>();
   private readonly adminMapLastEmitAt = new Map<string, number>();
+  // Cachés para no consultar la base en cada posición (el chofer envía una cada pocos segundos).
+  private readonly driverIdByUser = new Map<string, string>();
+  private readonly trackedLegsByDriver = new Map<
+    string,
+    { expiresAt: number; legs: TrackedLeg[] }
+  >();
+  // Sube con cada cambio de estado: una consulta iniciada antes no guarda su resultado viejo.
+  private trackedLegsGeneration = 0;
+  private readonly driverProfiles = new Map<
+    string,
+    { expiresAt: number; profile: CachedDriverProfile }
+  >();
   private batchTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -210,14 +251,23 @@ export class TrackingGateway
         return;
       }
 
+      // Igual que en el HTTP: con la contraseña temporal pendiente no se opera.
+      if (user.status === 'PASSWORD_CHANGE_REQUIRED') {
+        client.emit('authentication_error', {
+          success: false,
+          error: 'Debes cambiar tu contraseña temporal antes de continuar.',
+        });
+        client.disconnect(true);
+        return;
+      }
+
       client.userId = user.id;
       client.userRole = user.role;
       client.facilityId = user.facilityId;
 
-      if (!this.userSockets.has(user.id)) {
-        this.userSockets.set(user.id, new Set());
-      }
-      this.userSockets.get(user.id)!.add(client.id);
+      // Sala propia del usuario: los avisos personales llegan a todas sus conexiones. Con el
+      // adaptador de Redis (fase 5) funciona igual entre varias instancias.
+      await client.join(userRoom(user.id));
 
       if (user.role === 'ADMIN' || user.role === 'SUPERVISOR') {
         void client.join('admins');
@@ -236,15 +286,8 @@ export class TrackingGateway
     }
   }
 
-  handleDisconnect(client: AuthenticatedSocket): void {
-    if (!client.userId) return;
-    const set = this.userSockets.get(client.userId);
-    if (!set) return;
-    set.delete(client.id);
-    if (set.size === 0) {
-      this.userSockets.delete(client.userId);
-    }
-  }
+  // Socket.IO saca al socket de sus salas al desconectarse; no queda estado propio que limpiar.
+  handleDisconnect(_client: AuthenticatedSocket): void {}
 
   @SubscribeMessage('order:subscribe')
   async handleOrderSubscribe(
@@ -347,16 +390,14 @@ export class TrackingGateway
       };
     }
 
-    const driver = await this.prisma.driver.findUnique({
-      where: { userId: client.userId },
-      select: { id: true },
-    });
-    if (!driver) {
+    const driverId = await this.resolveDriverId(client.userId);
+    if (!driverId) {
       return {
         event: 'driver:location:received',
         data: { success: false, error: 'Perfil de chofer no encontrado' },
       };
     }
+    const driver = { id: driverId };
 
     const heading =
       typeof data.heading === 'number' && Number.isFinite(data.heading)
@@ -405,11 +446,26 @@ export class TrackingGateway
     await this.broadcastDriverLocationToTrackedOrders(driverId, fix);
   }
 
+  /**
+   * Cierra las conexiones abiertas de un usuario (suspensión o contraseña restablecida). El
+   * token solo se revisa al conectar, así que sin esto seguiría recibiendo eventos.
+   */
+  async disconnectUser(userId: string, reason: string): Promise<void> {
+    if (!this.server) return;
+    const sockets = await this.server.in(userRoom(userId)).fetchSockets();
+    for (const socket of sockets) {
+      socket.emit('authentication_error', { success: false, error: reason });
+      socket.disconnect(true);
+    }
+  }
+
   getLatestDriverLocation(driverId: string): LiveDriverLocation | null {
     return this.driverLocations.get(driverId) ?? null;
   }
 
   emitOrderStatusChanged(payload: OrderStatusBroadcast): void {
+    // Un cambio de estado o de asignación puede abrir o cerrar el seguimiento de un chofer.
+    this.invalidateTrackedLegs();
     if (!this.server) return;
     const wire = {
       orderId: payload.orderId,
@@ -453,8 +509,45 @@ export class TrackingGateway
     this.emitToAdminMap(facilityId, 'admin:map:driver-offline', { driverId });
   }
 
+  // Llamado cuando cambian los datos o el estado del chofer: se vuelve a leer de la base.
   async emitDriverProfileToAdminMap(driverId: string): Promise<void> {
+    this.invalidateDriverProfile(driverId);
+    await this.emitDriverToAdminMap(driverId);
+  }
+
+  // Descarta el perfil del chofer en memoria (estado, vehículo, placa o sede cambiaron).
+  invalidateDriverProfile(driverId: string): void {
+    this.driverProfiles.delete(driverId);
+  }
+
+  private async emitDriverToAdminMap(driverId: string): Promise<void> {
     if (!this.server) return;
+    const d = await this.loadDriverProfile(driverId);
+    if (!d) return;
+    const live = this.driverLocations.get(driverId);
+    const payload: AdminMapDriverPayload = {
+      driverId: d.driverId,
+      name: d.name,
+      phone: d.phone,
+      vehicle: d.vehicle,
+      plate: d.plate,
+      status: d.status,
+      facilityId: d.facilityId,
+      zoneId: d.zoneId,
+      lat: live?.lat ?? d.latitude,
+      lng: live?.lng ?? d.longitude,
+      heading: live?.heading,
+      speed: live?.speed,
+      locationAt: live ? new Date(live.timestamp).toISOString() : d.locationAt,
+    };
+    this.emitToAdminMap(d.facilityId, 'admin:map:driver-locations', {
+      drivers: [payload],
+    });
+  }
+
+  private async loadDriverProfile(driverId: string): Promise<CachedDriverProfile | null> {
+    const cached = this.driverProfiles.get(driverId);
+    if (cached && cached.expiresAt > Date.now()) return cached.profile;
     const d = await this.prisma.driver.findUnique({
       where: { id: driverId },
       include: {
@@ -462,9 +555,11 @@ export class TrackingGateway
         facility: { select: { id: true, zoneId: true } },
       },
     });
-    if (!d) return;
-    const live = this.driverLocations.get(driverId);
-    const payload: AdminMapDriverPayload = {
+    if (!d) {
+      this.driverProfiles.delete(driverId);
+      return null;
+    }
+    const profile: CachedDriverProfile = {
       driverId: d.id,
       name: d.user.name,
       phone: d.user.phone,
@@ -473,19 +568,71 @@ export class TrackingGateway
       status: d.status,
       facilityId: d.facilityId,
       zoneId: d.facility.zoneId,
-      lat: live?.lat ?? (d.latitude !== null ? Number(d.latitude) : null),
-      lng: live?.lng ?? (d.longitude !== null ? Number(d.longitude) : null),
-      heading: live?.heading,
-      speed: live?.speed,
-      locationAt: live
-        ? new Date(live.timestamp).toISOString()
-        : d.locationAt
-          ? d.locationAt.toISOString()
-          : null,
+      latitude: d.latitude !== null ? Number(d.latitude) : null,
+      longitude: d.longitude !== null ? Number(d.longitude) : null,
+      locationAt: d.locationAt ? d.locationAt.toISOString() : null,
     };
-    this.emitToAdminMap(d.facilityId, 'admin:map:driver-locations', {
-      drivers: [payload],
+    this.driverProfiles.set(driverId, {
+      expiresAt: Date.now() + DRIVER_PROFILE_TTL_MS,
+      profile,
     });
+    return profile;
+  }
+
+  private async resolveDriverId(userId: string): Promise<string | null> {
+    const cached = this.driverIdByUser.get(userId);
+    if (cached) return cached;
+    const driver = await this.prisma.driver.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+    if (!driver) return null;
+    this.driverIdByUser.set(userId, driver.id);
+    return driver.id;
+  }
+
+  private invalidateTrackedLegs(): void {
+    this.trackedLegsGeneration += 1;
+    this.trackedLegsByDriver.clear();
+  }
+
+  // Pedidos del chofer con seguimiento en vivo hacia el cliente (caché corta, ver arriba).
+  private async loadTrackedLegs(driverId: string): Promise<TrackedLeg[]> {
+    const cached = this.trackedLegsByDriver.get(driverId);
+    if (cached && cached.expiresAt > Date.now()) return cached.legs;
+    const generation = this.trackedLegsGeneration;
+    const rows = await this.prisma.fulfillmentLeg.findMany({
+      where: {
+        driverId,
+        status: { notIn: ['COMPLETED', 'CANCELLED'] },
+        order: {
+          status: { in: [...CUSTOMER_LIVE_TRACKING_STATUSES] },
+        },
+      },
+      select: {
+        kind: true,
+        order: {
+          select: {
+            id: true,
+            status: true,
+            customer: { select: { userId: true } },
+          },
+        },
+      },
+    });
+    const legs: TrackedLeg[] = rows.map((row) => ({
+      orderId: row.order.id,
+      kind: row.kind,
+      status: row.order.status,
+      customerUserId: row.order.customer.userId,
+    }));
+    if (generation === this.trackedLegsGeneration) {
+      this.trackedLegsByDriver.set(driverId, {
+        expiresAt: Date.now() + TRACKED_LEGS_TTL_MS,
+        legs,
+      });
+    }
+    return legs;
   }
 
   private emitToAdminMap(
@@ -515,11 +662,7 @@ export class TrackingGateway
 
   emitToUser(userId: string, event: string, data: unknown): void {
     if (!this.server) return;
-    const sockets = this.userSockets.get(userId);
-    if (!sockets || sockets.size === 0) return;
-    for (const socketId of sockets) {
-      this.server.to(socketId).emit(event, data);
-    }
+    this.server.to(userRoom(userId)).emit(event, data);
   }
 
   private async broadcastDriverLocationToTrackedOrders(
@@ -531,34 +674,17 @@ export class TrackingGateway
 
     // Solo retransmitir ubicación al cliente en órdenes que estén en un estado
     // con seguimiento activo hacia su domicilio (NUNCA en HEADING_TO_FACILITY ni en planta).
-    const activeLegs = await this.prisma.fulfillmentLeg.findMany({
-      where: {
-        driverId,
-        ...(hintOrderId ? { orderId: hintOrderId } : {}),
-        status: { notIn: ['COMPLETED', 'CANCELLED'] },
-        order: {
-          status: { in: [...CUSTOMER_LIVE_TRACKING_STATUSES] },
-        },
-      },
-      select: {
-        kind: true,
-        order: {
-          select: {
-            id: true,
-            status: true,
-            customer: { select: { userId: true } },
-          },
-        },
-      },
-    });
+    const activeLegs = (await this.loadTrackedLegs(driverId)).filter(
+      (leg) => !hintOrderId || leg.orderId === hintOrderId,
+    );
 
     const locationAt = new Date(fix.timestamp).toISOString();
     for (const leg of activeLegs) {
-      const expectedLeg = liveTrackingLegFor(leg.order.status);
+      const expectedLeg = liveTrackingLegFor(leg.status);
       if (expectedLeg !== leg.kind) continue;
 
       const payload = {
-        orderId: leg.order.id,
+        orderId: leg.orderId,
         driverId,
         activeLeg: expectedLeg,
         location: {
@@ -570,8 +696,8 @@ export class TrackingGateway
         },
       };
 
-      this.server.to(`order:${leg.order.id}`).emit('driver:location:updated', payload);
-      this.emitToUser(leg.order.customer.userId, 'driver:location:updated', payload);
+      this.server.to(`order:${leg.orderId}`).emit('driver:location:updated', payload);
+      this.emitToUser(leg.customerUserId, 'driver:location:updated', payload);
     }
 
     this.server.to('admins').emit('admin:driver:location', {
@@ -588,7 +714,7 @@ export class TrackingGateway
     const lastEmit = this.adminMapLastEmitAt.get(driverId) ?? 0;
     if (now - lastEmit >= ADMIN_MAP_LOCATION_THROTTLE_MS) {
       this.adminMapLastEmitAt.set(driverId, now);
-      await this.emitDriverProfileToAdminMap(driverId);
+      await this.emitDriverToAdminMap(driverId);
     }
   }
 

@@ -69,7 +69,7 @@ export class DriversService {
       if (!facility || !facility.active)
         throw new NotFoundException('La sede no existe o está inactiva.');
     }
-    return this.prisma.$transaction(async (tx) => {
+    const updated = await this.prisma.$transaction(async (tx) => {
       const driver = await tx.driver.update({
         where: { id },
         data: {
@@ -92,6 +92,9 @@ export class DriversService {
       });
       return this.view(driver);
     });
+    // Sede, vehículo, placa o estado cambiaron: el mapa operativo vuelve a leerlos.
+    this.tracking?.invalidateDriverProfile(id);
+    return updated;
   }
 
   // ---- Perfil y telemetría del chofer autenticado
@@ -118,6 +121,7 @@ export class DriversService {
       },
       include: DRIVER_INCLUDE,
     });
+    if (dto.status) this.tracking?.invalidateDriverProfile(driver.id);
     if (hasLat && dto.latitude !== undefined && dto.longitude !== undefined) {
       void this.tracking?.recordDriverLocationFromHttp(
         driver.id,

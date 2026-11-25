@@ -1,14 +1,18 @@
 import {
   BadRequestException,
+  HttpException,
+  HttpStatus,
   Injectable,
   Logger,
   NotFoundException,
   OnModuleDestroy,
+  OnModuleInit,
 } from '@nestjs/common';
 import type { OrderStatus } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { MapboxDirectionsService } from './mapbox-directions.service';
 import {
+  CUSTOMER_LIVE_TRACKING_STATUSES,
   isLiveCustomerTrackingStatus,
   isLocationFresh,
   liveTrackingLegFor,
@@ -17,6 +21,10 @@ import {
 import { TrackingGateway } from './tracking.gateway';
 
 const ETA_PUSH_INTERVAL_MS = 30_000;
+// Consultas de ruta y tiempo estimado por usuario y minuto. La app del cliente usa unas 14 en
+// el peor caso (respaldo cada 30 s y recálculo por desvío cada 5 s como mínimo).
+export const TRACKING_QUERIES_PER_MINUTE = 30;
+const TRACKING_BUDGET_WINDOW_MS = 60_000;
 
 export interface ResolvedDriverPosition {
   lat: number;
@@ -27,12 +35,11 @@ export interface ResolvedDriverPosition {
 }
 
 @Injectable()
-export class OrderEtaService implements OnModuleDestroy {
+export class OrderEtaService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OrderEtaService.name);
-  private readonly intervalsByOrderId = new Map<
-    string,
-    ReturnType<typeof setInterval>
-  >();
+  private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private sweeping = false;
+  private readonly queriesByUser = new Map<string, number[]>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -40,36 +47,66 @@ export class OrderEtaService implements OnModuleDestroy {
     private readonly gateway: TrackingGateway,
   ) {}
 
-  onModuleDestroy(): void {
-    for (const timer of this.intervalsByOrderId.values()) {
-      clearInterval(timer);
-    }
-    this.intervalsByOrderId.clear();
-  }
-
-  syncTrackingForStatus(orderId: string, status: OrderStatus): void {
-    if (isLiveCustomerTrackingStatus(status)) {
-      this.startPeriodicEta(orderId);
-      void this.pushEtaForOrder(orderId);
-    } else {
-      this.stopPeriodicEta(orderId);
-    }
-  }
-
-  startPeriodicEta(orderId: string): void {
-    if (this.intervalsByOrderId.has(orderId)) return;
-    const timer = setInterval(() => {
-      void this.pushEtaForOrder(orderId);
+  onModuleInit(): void {
+    this.sweepTimer = setInterval(() => {
+      void this.sweepLiveOrders();
     }, ETA_PUSH_INTERVAL_MS);
-    timer.unref();
-    this.intervalsByOrderId.set(orderId, timer);
+    this.sweepTimer.unref();
   }
 
-  stopPeriodicEta(orderId: string): void {
-    const existing = this.intervalsByOrderId.get(orderId);
-    if (!existing) return;
-    clearInterval(existing);
-    this.intervalsByOrderId.delete(orderId);
+  onModuleDestroy(): void {
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    this.sweepTimer = null;
+  }
+
+  // Límite propio por usuario para /route y /eta (el general del HTTP es por IP).
+  consumeUserBudget(userId: string, now = Date.now()): void {
+    const recent = (this.queriesByUser.get(userId) ?? []).filter(
+      (at) => now - at < TRACKING_BUDGET_WINDOW_MS,
+    );
+    if (recent.length >= TRACKING_QUERIES_PER_MINUTE) {
+      this.queriesByUser.set(userId, recent);
+      throw new HttpException(
+        'Demasiadas consultas de seguimiento; intenta de nuevo en unos segundos.',
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    recent.push(now);
+    this.queriesByUser.set(userId, recent);
+  }
+
+  // Al cambiar de estado se envía el tiempo estimado de inmediato si el pedido entra (o sigue)
+  // en un tramo con seguimiento. El envío periódico lo cubre el barrido.
+  syncTrackingForStatus(orderId: string, status: OrderStatus): void {
+    if (isLiveCustomerTrackingStatus(status)) void this.pushEtaForOrder(orderId);
+  }
+
+  /**
+   * Envía el tiempo estimado de todos los pedidos con seguimiento activo. Sale de la base en
+   * cada vuelta, así que un reinicio del backend no deja pedidos sin actualizar. Con una sola
+   * instancia no hace falta coordinar; con varias se agregaría un bloqueo (ver fase 5 del plan).
+   */
+  async sweepLiveOrders(): Promise<number> {
+    if (this.sweeping) return 0;
+    this.sweeping = true;
+    try {
+      const orders = await this.prisma.order.findMany({
+        where: {
+          status: { in: [...CUSTOMER_LIVE_TRACKING_STATUSES] },
+          legs: { some: { driverId: { not: null } } },
+        },
+        select: { id: true },
+      });
+      for (const { id } of orders) await this.pushEtaForOrder(id);
+      return orders.length;
+    } catch (error) {
+      this.logger.warn(
+        `Barrido de tiempo estimado falló: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return 0;
+    } finally {
+      this.sweeping = false;
+    }
   }
 
   async pushEtaForOrder(orderId: string): Promise<void> {
@@ -105,14 +142,7 @@ export class OrderEtaService implements OnModuleDestroy {
     }
   }
 
-  async getRouteForOrder(
-    orderId: string,
-    query: {
-      driverLat?: number;
-      driverLng?: number;
-      driverHeading?: number;
-    },
-  ) {
+  async getRouteForOrder(orderId: string) {
     const order = await this.loadOrderForTracking(orderId);
     const activeLeg = liveTrackingLegFor(order.status);
     if (!activeLeg) {
@@ -126,12 +156,7 @@ export class OrderEtaService implements OnModuleDestroy {
       throw new NotFoundException('No existe el tramo activo para este pedido.');
     }
 
-    const driverPos = this.resolveBestDriverPosition(
-      leg.driver,
-      query.driverLat,
-      query.driverLng,
-      query.driverHeading,
-    );
+    const driverPos = this.resolveBestDriverPosition(leg.driver);
     if (!driverPos) {
       throw new NotFoundException(
         'La ubicación del chofer aún no está disponible.',
@@ -201,10 +226,7 @@ export class OrderEtaService implements OnModuleDestroy {
   private async computeEtaInternal(orderId: string) {
     const order = await this.loadOrderForTracking(orderId);
     const activeLeg = liveTrackingLegFor(order.status);
-    if (!activeLeg) {
-      this.stopPeriodicEta(orderId);
-      return null;
-    }
+    if (!activeLeg) return null;
 
     const leg = order.legs.find((l) => l.kind === activeLeg);
     if (!leg || !leg.driver) return null;
@@ -244,23 +266,7 @@ export class OrderEtaService implements OnModuleDestroy {
       longitude: unknown;
       locationAt: Date | null;
     } | null,
-    overrideLat?: number,
-    overrideLng?: number,
-    overrideHeading?: number,
   ): ResolvedDriverPosition | null {
-    if (
-      overrideLat !== undefined &&
-      overrideLng !== undefined &&
-      !validateDriverCoordinates(overrideLat, overrideLng)
-    ) {
-      return {
-        lat: overrideLat,
-        lng: overrideLng,
-        heading: overrideHeading,
-        locationAt: new Date().toISOString(),
-      };
-    }
-
     if (!driver) return null;
 
     const mem = this.gateway.getLatestDriverLocation(driver.id);

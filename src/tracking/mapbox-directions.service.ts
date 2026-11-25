@@ -44,6 +44,9 @@ interface DirectionsApiResponse {
 const ORIGIN_BEARING_TOLERANCE_DEG = 45;
 const EARTH_RADIUS_M = 6_371_000;
 const FALLBACK_SPEED_MPS = (25 * 1000) / 3600; // 25 km/h urbano
+// Las calles no siguen la línea recta: el recorrido se estima como 1.3 veces la distancia
+// directa para que el tiempo estimado no sea demasiado optimista cuando Mapbox no responde.
+export const ROAD_SINUOSITY_FACTOR = 1.3;
 
 function haversineMeters(a: RouteCoordinates, b: RouteCoordinates): number {
   const toRad = (deg: number) => (deg * Math.PI) / 180;
@@ -66,6 +69,9 @@ function normalizeBearing(bearing: number | undefined): number | undefined {
 export class MapboxDirectionsService implements OnModuleDestroy {
   private readonly logger = new Logger(MapboxDirectionsService.name);
   private readonly accessToken: string;
+  // OSRM de respaldo (opcional). El servidor público router.project-osrm.org solo sirve en
+  // desarrollo; en producción se deja vacío o se apunta a un OSRM propio.
+  private readonly osrmBaseUrl: string;
   private readonly mapboxBaseUrl = 'https://api.mapbox.com';
 
   private readonly cache = new Map<string, CacheEntry>();
@@ -81,9 +87,10 @@ export class MapboxDirectionsService implements OnModuleDestroy {
 
   constructor(private readonly config: ConfigService) {
     this.accessToken = this.config.get<string>('MAPBOX_ACCESS_TOKEN')?.trim() || '';
+    this.osrmBaseUrl = (this.config.get<string>('OSRM_URL')?.trim() || '').replace(/\/+$/, '');
     if (!this.accessToken) {
       this.logger.warn(
-        'MAPBOX_ACCESS_TOKEN no configurado: las rutas usarán OSRM/Haversine como respaldo.',
+        'MAPBOX_ACCESS_TOKEN no configurado: las rutas usarán OSRM_URL o la estimación en línea recta.',
       );
     }
     this.cleanupTimer = setInterval(() => this.cleanCache(), 10 * 60 * 1000);
@@ -116,7 +123,9 @@ export class MapboxDirectionsService implements OnModuleDestroy {
       }
     }
 
-    const osrmRoute = await this.fetchOsrmRoute(origin, destination);
+    const osrmRoute = this.osrmBaseUrl
+      ? await this.fetchOsrmRoute(origin, destination)
+      : null;
     if (osrmRoute) {
       this.setCached(cacheKey, osrmRoute);
       return osrmRoute;
@@ -150,7 +159,7 @@ export class MapboxDirectionsService implements OnModuleDestroy {
     destination: RouteCoordinates,
   ): Promise<RouteResult | null> {
     const coords = `${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}`;
-    const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+    const url = `${this.osrmBaseUrl}/route/v1/driving/${coords}?overview=full&geometries=geojson`;
     return this.fetchDirectionsJson(url, 'osrm');
   }
 
@@ -208,7 +217,9 @@ export class MapboxDirectionsService implements OnModuleDestroy {
     origin: RouteCoordinates,
     destination: RouteCoordinates,
   ): RouteResult {
-    const distanceMeters = haversineMeters(origin, destination);
+    const distanceMeters = Math.round(
+      haversineMeters(origin, destination) * ROAD_SINUOSITY_FACTOR,
+    );
     const durationSeconds = Math.max(
       60,
       Math.round(distanceMeters / FALLBACK_SPEED_MPS),
