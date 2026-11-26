@@ -105,3 +105,47 @@ describe('avisos de estado en tiempo real', () => {
     assert.deepEqual(statusesFor(id), []);
   });
 });
+
+describe('cambios sin transición de estado también avisan', () => {
+  const put = (token: string, path: string, body: object = {}) =>
+    t.http.put(`${api}${path}`).set(bearer(token)).send(body);
+  const get = (token: string, path: string) => t.http.get(`${api}${path}`).set(bearer(token));
+
+  it('programar la entrega desde la app avisa a la web (Entregas)', async () => {
+    const c = await w.newClient('rt-outbound@test.local');
+    await w.credit(c.customerId, 100);
+    const id = await w.order(c);
+    await post(c.token, `/orders/${id}/pay`, { expectedVersion: 1 }).expect(201);
+    emitted = [];
+    await put(c.token, `/orders/${id}/outbound`, {
+      expectedVersion: await w.version(id), slotId: await w.slot('DRIVER_DELIVERY'),
+    }).expect(200);
+    assert.deepEqual(statusesFor(id), ['CONFIRMED']);
+    assert.equal(emitted.find((e) => e.orderId === id)?.facilityId, w.facilityId);
+  });
+
+  it('registrar un ajuste avisa al cliente y su decisión avisa a planta', async () => {
+    const c = await w.newClient('rt-adjust@test.local');
+    await w.credit(c.customerId, 100);
+    const id = await w.order(c);
+    await post(c.token, `/orders/${id}/pay`, { expectedVersion: 1 }).expect(201);
+    // Atajo: el recorrido hasta planta ya lo cubre lifecycle.test; aquí importa el aviso.
+    await t.prisma.order.update({ where: { id }, data: { status: 'PRICING_PENDING' } });
+
+    emitted = [];
+    await post(w.supervisor, `/orders/${id}/adjustments`, {
+      type: 'EXTRA_ITEM', internalReason: 'Mancha especial', customerMessage: 'Tratamiento de mancha',
+      amountDifference: 2, expectedVersion: await w.version(id),
+    }).expect(201);
+    assert.deepEqual(statusesFor(id), ['PRICING_PENDING']);
+    assert.equal(emitted.find((e) => e.orderId === id)?.customerUserId, await userIdOf(c));
+
+    await post(w.supervisor, `/orders/${id}/pricing/resolve`, { expectedVersion: await w.version(id) }).expect(201);
+    const [adj] = (await get(c.token, `/orders/${id}/adjustments`).expect(200)).body;
+    emitted = [];
+    await post(c.token, `/orders/${id}/adjustments/${adj.id}/decision`, {
+      approve: true, expectedVersion: await w.version(id),
+    }).expect(201);
+    assert.deepEqual(statusesFor(id), ['CUSTOMER_APPROVAL_PENDING']);
+  });
+});

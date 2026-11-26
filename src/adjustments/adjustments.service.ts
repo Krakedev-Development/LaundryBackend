@@ -87,7 +87,7 @@ export class AdjustmentsService {
     ]);
     const diff = new D(dto.amountDifference);
     const increase = diff.gt(0);
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       const adjustment = await tx.priceAdjustment.create({
         data: {
           orderId,
@@ -109,6 +109,9 @@ export class AdjustmentsService {
       await this.bump(tx, order, user, 'Ajuste de precio registrado');
       return adjustment;
     });
+    // El cliente ve el ajuste por aprobar sin recargar la app.
+    await this.orders.notifyStatusChangedById(orderId);
+    return created;
   }
 
   async list(user: AuthUser, orderId: string) {
@@ -138,7 +141,7 @@ export class AdjustmentsService {
       );
     if (order.status !== 'CUSTOMER_APPROVAL_PENDING')
       throw new ConflictException('El pedido no espera una decisión del cliente.');
-    return this.prisma.$transaction(async (tx) => {
+    const decision = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.priceAdjustment.updateMany({
         where: { id: adjustmentId, orderId, status: 'PENDING_CUSTOMER' },
         data: { status: dto.approve ? 'APPROVED' : 'REJECTED', resolvedAt: new Date() },
@@ -158,6 +161,9 @@ export class AdjustmentsService {
       });
       return { pending, requiresStaffReview: pending === 0 && rejected > 0 };
     });
+    // Planta ve enseguida que el cliente decidió y puede fijar el precio final.
+    await this.orders.notifyStatusChangedById(orderId);
+    return decision;
   }
 
   // ---- Cierre de la fijación de precio
