@@ -478,7 +478,7 @@ export class OrdersService {
       this.assertCoverage(facility.zone.polygon, address);
     }
 
-    return this.prisma.$transaction(async (tx) => {
+    const scheduled = await this.prisma.$transaction(async (tx) => {
       await this.slots.reserveCapacity(tx, slot.id);
       await tx.slotReservation.create({ data: { slotId: slot.id, legId: leg.id } });
       await tx.fulfillmentLeg.update({
@@ -495,6 +495,9 @@ export class OrdersService {
       await this.bump(tx, order, user, 'Entrega programada');
       return this.view(await this.loadOrder(id, tx));
     });
+    // La web (Entregas) ve enseguida que la entrega ya tiene horario y puede asignarse.
+    await this.notifyStatusChangedById(id);
+    return scheduled;
   }
 
   async driverCandidates(
@@ -834,7 +837,7 @@ export class OrdersService {
       !!outbound?.slot &&
       `${ymd(outbound.slot.date)} ${outbound.slot.startTime}` < `${ymd(slot.date)} ${slot.endTime}`;
 
-    return this.prisma.$transaction(async (tx) => {
+    const rescheduled = await this.prisma.$transaction(async (tx) => {
       const { count } = await tx.order.updateMany({
         where: { id, version: order.version, status: order.status },
         data: { version: { increment: 1 } },
@@ -885,6 +888,9 @@ export class OrdersService {
       });
       return this.view(await this.loadOrder(id, tx));
     });
+    // El cliente (app) y las colas de la web ven la nueva recogida sin recargar.
+    await this.notifyStatusChangedById(id);
+    return rescheduled;
   }
 
   /**
