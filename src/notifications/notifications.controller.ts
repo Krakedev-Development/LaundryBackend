@@ -1,5 +1,8 @@
 import {
+  BadRequestException,
+  Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -7,12 +10,19 @@ import {
   Query,
 } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsIn, IsInt, IsOptional, Min } from 'class-validator';
 import {
-  CurrentUser,
-  Roles,
-  type AuthUser,
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+} from 'class-validator';
+import {
   AllowWithoutKyc,
+  CurrentUser,
+  type AuthUser,
 } from '../common/decorators/auth.decorators';
 import { NotificationsService } from './notifications.service';
 
@@ -22,7 +32,31 @@ class NotificationsQuery {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) pageSize?: number;
 }
 
-@Roles('CLIENT')
+class RegisterDeviceTokenDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(255)
+  token: string;
+
+  @IsIn(['IOS', 'ANDROID', 'WEB'])
+  platform: 'IOS' | 'ANDROID' | 'WEB';
+
+  @IsIn(['CLIENT', 'DRIVER', 'WEB'])
+  appType: 'CLIENT' | 'DRIVER' | 'WEB';
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  deviceName?: string;
+}
+
+class UnregisterDeviceTokenDto {
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  token?: string;
+}
+
 @AllowWithoutKyc()
 @Controller('notifications')
 export class NotificationsController {
@@ -36,6 +70,27 @@ export class NotificationsController {
   @Post('read-all')
   readAll(@CurrentUser() user: AuthUser) {
     return this.notifications.markAllRead(user);
+  }
+
+  @Post('devices')
+  registerDevice(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: RegisterDeviceTokenDto,
+  ) {
+    return this.notifications.registerDevice(user, dto);
+  }
+
+  @Delete('devices')
+  unregisterDevice(
+    @CurrentUser() user: AuthUser,
+    @Body() dto?: UnregisterDeviceTokenDto,
+    @Query('token') queryToken?: string,
+  ) {
+    const token = (dto?.token ?? queryToken ?? '').trim();
+    if (!token) {
+      throw new BadRequestException('El token del dispositivo es obligatorio.');
+    }
+    return this.notifications.unregisterDevice(user, token);
   }
 
   @Post(':id/read')

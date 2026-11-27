@@ -179,6 +179,31 @@ export interface OrderEtaBroadcast {
   updatedAt: string;
 }
 
+export interface ChatMessageBroadcast {
+  id: string;
+  orderId: string;
+  orderNumber?: number;
+  facilityId?: string | null;
+  senderId: string;
+  senderName: string;
+  senderRole: UserRole;
+  text: string;
+  createdAt: string;
+}
+
+export interface NotificationBroadcast {
+  id: string;
+  userId: string | null;
+  customerId: string | null;
+  orderId: string | null;
+  category: string;
+  title: string;
+  body: string;
+  data: unknown;
+  readAt: string | null;
+  createdAt: string;
+}
+
 // Los orígenes permitidos (CORS) los fija ConfiguredIoAdapter con CORS_ORIGINS.
 @WebSocketGateway({
   transports: ['websocket', 'polling'],
@@ -701,6 +726,33 @@ export class TrackingGateway
   emitToUser(userId: string, event: string, data: unknown): void {
     if (!this.server) return;
     this.server.to(userRoom(userId)).emit(event, data);
+  }
+
+  emitChatMessage(
+    payload: ChatMessageBroadcast,
+    recipients: {
+      customerUserId: string;
+      driverUserIds?: string[];
+      facilityId?: string | null;
+    },
+  ): void {
+    if (!this.server) return;
+    const rooms = Array.from(
+      new Set([
+        `order:${payload.orderId}`,
+        userRoom(recipients.customerUserId),
+        ...(recipients.driverUserIds ?? []).map((uid) => userRoom(uid)),
+        STAFF_ALL_ROOM,
+        ...(recipients.facilityId
+          ? [staffFacilityRoom(recipients.facilityId)]
+          : []),
+      ]),
+    );
+    this.server.to(rooms).emit('chat:message:new', payload);
+  }
+
+  emitNotification(userId: string, payload: NotificationBroadcast): void {
+    this.emitToUser(userId, 'notification:new', payload);
   }
 
   private async broadcastDriverLocationToTrackedOrders(

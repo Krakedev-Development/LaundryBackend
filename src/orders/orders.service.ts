@@ -540,6 +540,22 @@ export class OrdersService {
         user,
         `Chofer asignado: ${driver.user.name}`,
       );
+      await this.notifications.notifyUser(tx, driver.userId, {
+        orderId: id,
+        category: 'ORDER_ASSIGNED',
+        title:
+          dto.leg === 'INBOUND'
+            ? 'Nueva recogida asignada'
+            : 'Nueva entrega asignada',
+        body: `Se te asignó el pedido #${order.number}.`,
+        data: {
+          type: 'ORDER_ASSIGNED',
+          orderId: id,
+          orderNumber: order.number,
+          leg: dto.leg,
+        },
+        channelId: 'assignments',
+      });
       await tx.auditLog.create({
         data: {
           actorId: user.id, actorRole: user.role, action: 'LEG_ASSIGNED',
