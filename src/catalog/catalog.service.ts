@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { AuthUser } from '../common/decorators/auth.decorators';
+import { currentWeekStart, effectiveMembershipStatus } from '../customers/membership.util';
 import { Prisma } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
@@ -58,6 +59,91 @@ export class CatalogService {
       where: includeInactive ? {} : { active: true },
       orderBy: ORDER[resource] ?? { createdAt: 'asc' },
     });
+  }
+
+  async listMemberships(includeInactive: boolean) {
+    const now = new Date();
+    const plans = await this.prisma.membershipPlan.findMany({
+      where: includeInactive ? {} : { active: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!plans.length) return [];
+    const counts = await this.prisma.customer.groupBy({
+      by: ['membershipPlanId'],
+      where: {
+        membershipPlanId: { in: plans.map((p) => p.id) },
+        AND: [
+          { OR: [{ membershipStatus: null }, { membershipStatus: 'ACTIVE' }] },
+          { OR: [{ membershipExpiresAt: null }, { membershipExpiresAt: { gt: now } }] },
+        ],
+      },
+      _count: { _all: true },
+    });
+    const countByPlan = new Map(
+      counts
+        .filter((c) => c.membershipPlanId)
+        .map((c) => [c.membershipPlanId!, c._count._all]),
+    );
+    return plans.map((plan) => ({
+      ...plan,
+      activeSubscribersCount: countByPlan.get(plan.id) ?? 0,
+    }));
+  }
+
+  async listMembershipSubscribers(planId: string) {
+    const plan = await this.prisma.membershipPlan.findUnique({
+      where: { id: planId },
+      select: { id: true, name: true, weeklyPickups: true },
+    });
+    if (!plan) throw new NotFoundException('El plan no existe.');
+
+    const now = new Date();
+    const policy = await this.prisma.businessPolicy.findFirst({
+      where: { active: true },
+      select: { timezone: true },
+    });
+    const weekStart = currentWeekStart(policy?.timezone ?? 'UTC', now);
+
+    const customers = await this.prisma.customer.findMany({
+      where: {
+        membershipPlanId: plan.id,
+        AND: [
+          { OR: [{ membershipStatus: null }, { membershipStatus: 'ACTIVE' }] },
+          { OR: [{ membershipExpiresAt: null }, { membershipExpiresAt: { gt: now } }] },
+        ],
+      },
+      orderBy: { membershipStartedAt: 'desc' },
+      include: {
+        user: { select: { name: true, email: true, phone: true } },
+      },
+    });
+
+    const customerIds = customers.map((c) => c.id);
+    const weeklyOrders = customerIds.length
+      ? await this.prisma.order.groupBy({
+          by: ['customerId'],
+          where: {
+            customerId: { in: customerIds },
+            freeLogisticsApplied: true,
+            status: { not: 'CANCELLED' },
+            createdAt: { gte: weekStart },
+          },
+          _count: { _all: true },
+        })
+      : [];
+    const usedByCustomer = new Map(weeklyOrders.map((o) => [o.customerId, o._count._all]));
+
+    return customers.map((c) => ({
+      customerId: c.id,
+      name: c.user.name,
+      email: c.user.email,
+      phone: c.user.phone,
+      startedAt: c.membershipStartedAt,
+      expiresAt: c.membershipExpiresAt,
+      status: effectiveMembershipStatus(c, now) ?? 'ACTIVE',
+      weeklyPickupsUsed: usedByCustomer.get(c.id) ?? 0,
+      weeklyPickupsLimit: plan.weeklyPickups,
+    }));
   }
 
   async get(resource: CatalogResource, id: string) {

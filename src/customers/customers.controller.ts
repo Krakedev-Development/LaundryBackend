@@ -17,6 +17,7 @@ import {
 } from '../common/decorators/auth.decorators';
 import { CustomersService } from './customers.service';
 import {
+  AdminSetMembershipDto,
   CreateAddressDto,
   SetMembershipDto,
   UpdateAddressDto,
@@ -32,9 +33,19 @@ export class CustomersController {
     return this.customers.profile(user);
   }
 
+  @Get('membership')
+  membership(@CurrentUser() user: AuthUser) {
+    return this.customers.getMyMembership(user);
+  }
+
   @Put('membership')
   setMembership(@CurrentUser() user: AuthUser, @Body() dto: SetMembershipDto) {
     return this.customers.setMembership(user, dto.planId);
+  }
+
+  @Delete('membership')
+  cancelMembership(@CurrentUser() user: AuthUser) {
+    return this.customers.cancelMembership(user);
   }
 
   @Get('addresses')
@@ -73,5 +84,15 @@ export class CustomersDirectoryController {
   @Get()
   directory() {
     return this.customers.directory();
+  }
+
+  @Roles('ADMIN')
+  @Put(':id/membership')
+  assignMembership(
+    @CurrentUser() actor: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: AdminSetMembershipDto,
+  ) {
+    return this.customers.adminSetMembership(actor, id, dto);
   }
 }

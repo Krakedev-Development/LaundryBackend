@@ -152,7 +152,12 @@ export class CatalogController {
   @Public()
   @Get('memberships')
   memberships(@CurrentUser() u?: AuthUser) {
-    return this.catalog.list('membershipPlan', isAdmin(u));
+    return this.catalog.listMemberships(isAdmin(u));
+  }
+  @Roles('ADMIN', 'SUPERVISOR')
+  @Get('memberships/:id/subscribers')
+  membershipSubscribers(@Param('id', ParseUUIDPipe) id: string) {
+    return this.catalog.listMembershipSubscribers(id);
   }
   @Roles('ADMIN')
   @Post('memberships')

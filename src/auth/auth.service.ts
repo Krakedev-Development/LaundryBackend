@@ -8,7 +8,11 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
-import type { KycStatus, User } from '../generated/prisma/client';
+import {
+  effectiveMembershipStatus,
+  isMembershipActive,
+} from '../customers/membership.util';
+import type { KycStatus, MembershipStatus, User } from '../generated/prisma/client';
 import { MailService } from '../mail/mail.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
@@ -40,11 +44,18 @@ export interface PublicUser {
   kycStatus: KycStatus | null;
   // Plan de membresía elegido por el cliente; null mientras no haya elegido ninguno.
   membershipPlan: { id: string; name: string } | null;
+  membershipStatus: MembershipStatus | null;
+  membershipStartedAt: Date | null;
+  membershipExpiresAt: Date | null;
 }
 
 // Datos del cliente que viajan con el usuario público.
 const CUSTOMER_PUBLIC = {
   kycStatus: true,
+  membershipPlanId: true,
+  membershipStatus: true,
+  membershipStartedAt: true,
+  membershipExpiresAt: true,
   membershipPlan: { select: { id: true, name: true } },
 } as const;
 
@@ -52,6 +63,9 @@ export function toPublic(
   user: User,
   kycStatus: KycStatus | null = null,
   membershipPlan: { id: string; name: string } | null = null,
+  membershipStatus: MembershipStatus | null = null,
+  membershipStartedAt: Date | null = null,
+  membershipExpiresAt: Date | null = null,
 ): PublicUser {
   return {
     id: user.id,
@@ -62,6 +76,35 @@ export function toPublic(
     facilityId: user.facilityId,
     kycStatus,
     membershipPlan,
+    membershipStatus,
+    membershipStartedAt,
+    membershipExpiresAt,
+  };
+}
+
+function publicMembership(
+  customer?: {
+    membershipPlanId: string | null;
+    membershipStatus: MembershipStatus | null;
+    membershipStartedAt: Date | null;
+    membershipExpiresAt: Date | null;
+    membershipPlan: { id: string; name: string } | null;
+  } | null,
+) {
+  if (!customer) {
+    return {
+      membershipPlan: null,
+      membershipStatus: null,
+      membershipStartedAt: null,
+      membershipExpiresAt: null,
+    };
+  }
+  const active = isMembershipActive(customer);
+  return {
+    membershipPlan: active ? customer.membershipPlan : null,
+    membershipStatus: effectiveMembershipStatus(customer),
+    membershipStartedAt: customer.membershipStartedAt,
+    membershipExpiresAt: customer.membershipExpiresAt,
   };
 }
 
@@ -128,11 +171,15 @@ export class AuthService {
           entityId: user.id,
         },
       });
+    const membership = publicMembership(user.customer);
     return {
       user: toPublic(
         user,
         user.customer?.kycStatus ?? null,
-        user.customer?.membershipPlan ?? null,
+        membership.membershipPlan,
+        membership.membershipStatus,
+        membership.membershipStartedAt,
+        membership.membershipExpiresAt,
       ),
       tokens: await this.issueTokens(user),
     };
@@ -301,10 +348,14 @@ export class AuthService {
       where: { id: userId },
       include: { customer: { select: CUSTOMER_PUBLIC } },
     });
+    const membership = publicMembership(user.customer);
     return toPublic(
       user,
       user.customer?.kycStatus ?? null,
-      user.customer?.membershipPlan ?? null,
+      membership.membershipPlan,
+      membership.membershipStatus,
+      membership.membershipStartedAt,
+      membership.membershipExpiresAt,
     );
   }
 

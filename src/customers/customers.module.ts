@@ -1,4 +1,5 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
+import { WalletModule } from '../wallet/wallet.module';
 import {
   CustomersController,
   CustomersDirectoryController,
@@ -6,6 +7,7 @@ import {
 import { CustomersService } from './customers.service';
 
 @Module({
+  imports: [forwardRef(() => WalletModule)],
   controllers: [CustomersController, CustomersDirectoryController],
   providers: [CustomersService],
   exports: [CustomersService],

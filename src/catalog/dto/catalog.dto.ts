@@ -28,6 +28,13 @@ class Activatable {
 
 export class CreateGarmentDto {
   @IsString() @IsNotEmpty() @MaxLength(80) name: string;
+  @IsOptional() @IsString() @MaxLength(300) description?: string | null;
+  @IsOptional() @IsString() @MaxLength(60) category?: string | null;
+  @IsOptional()
+  @IsInt({ message: 'El tiempo estimado se indica en horas enteras.' })
+  @Min(1, { message: 'El tiempo estimado debe ser de al menos 1 hora.' })
+  @Max(720, { message: 'El tiempo estimado no puede superar 720 horas (30 días).' })
+  estimatedHours?: number | null;
   @money() basePrice: number;
   @IsOptional() @IsString() @MaxLength(40) icon?: string;
 }
@@ -52,7 +59,7 @@ export class UpdateServiceTypeDto extends PartialType(CreateServiceTypeDto) {
 
 export class CreateExtraDto {
   @IsString() @IsNotEmpty() @MaxLength(80) name: string;
-  @IsOptional() @IsString() @MaxLength(300) description?: string;
+  @IsOptional() @IsString() @MaxLength(300) description?: string | null;
   @money() price: number;
 }
 export class UpdateExtraDto extends PartialType(CreateExtraDto) {
@@ -107,9 +114,14 @@ export class UpdatePromotionDto extends Activatable {
 
 export class CreateMembershipPlanDto {
   @IsString() @IsNotEmpty() @MaxLength(80) name: string;
+  @IsOptional() @IsString() @MaxLength(500) description?: string | null;
   @money() priceMonthly: number;
-  @IsOptional() @IsInt() @Min(0) weeklyPickups?: number;
+  @IsOptional() @IsIn(['MONTHLY', 'QUARTERLY', 'YEARLY']) interval?: 'MONTHLY' | 'QUARTERLY' | 'YEARLY';
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) includedWeight?: number | null;
+  @IsOptional() @IsIn(['KG', 'LB']) weightUnit?: 'KG' | 'LB';
+  @IsOptional() @IsInt() @Min(0) weeklyPickups?: number | null;
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(100) garmentDiscountPercent: number;
+  @IsOptional() @IsBoolean() priorityService?: boolean;
   @IsArray() @IsString({ each: true }) @MaxLength(200, { each: true }) benefits: string[];
 }
 export class UpdateMembershipPlanDto extends PartialType(CreateMembershipPlanDto) {

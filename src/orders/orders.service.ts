@@ -16,6 +16,7 @@ import {
   type TimeSlot,
 } from '../generated/prisma/client';
 import { CustomersService } from '../customers/customers.service';
+import { currentWeekStart, isMembershipActive } from '../customers/membership.util';
 import { pointInPolygon, type LatLng } from '../geo/geo.service';
 import { PolicyService } from '../policy/policy.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -59,15 +60,26 @@ const D = Prisma.Decimal;
 type Tx = Prisma.TransactionClient;
 
 const ORDER_INCLUDE = {
-  items: true,
-  extras: true,
+  items: {
+    include: {
+      garment: { select: { id: true, name: true, icon: true } },
+      service: { select: { id: true, name: true } },
+    },
+  },
+  extras: {
+    include: {
+      extra: { select: { id: true, name: true } },
+    },
+  },
   legs: { include: { slot: true, driver: { select: { userId: true } } }, orderBy: { kind: 'asc' } },
   events: { orderBy: { createdAt: 'asc' } },
   weightTier: { select: { id: true, name: true } },
+  facility: { select: { id: true, name: true } },
   customer: {
     select: {
       id: true,
       userId: true,
+      membershipPlan: { select: { id: true, name: true } },
       user: { select: { name: true, email: true, phone: true } },
     },
   },
@@ -194,12 +206,15 @@ export class OrdersService {
     const extras = dto.extraIds?.length
       ? await this.activeExtras(dto.extraIds)
       : [];
+    const now = new Date();
     const promotion = dto.promotionCode
       ? await this.findPromotion(dto.promotionCode)
       : null;
-    const plan = customer.membershipPlanId
-      ? await this.prisma.membershipPlan.findUnique({ where: { id: customer.membershipPlanId } })
-      : null;
+    const plan =
+      isMembershipActive(customer, now) && customer.membershipPlanId
+        ? await this.prisma.membershipPlan.findUnique({ where: { id: customer.membershipPlanId } })
+        : null;
+    const activePlan = plan?.active ? plan : null;
 
     const perWeight = !hasItems;
     const tier = perWeight ? await this.activeWeightTier(dto.weightTierId!) : null;
@@ -212,22 +227,40 @@ export class OrdersService {
         ? new D(await this.policies.requireParam('deliveryFee', policy))
         : new D(0);
 
+    let freeLogisticsApplied = false;
+    const weekStart = currentWeekStart(policy.timezone, now);
+    if (activePlan) {
+      if (activePlan.weeklyPickups === null) {
+        freeLogisticsApplied = true;
+      } else if (activePlan.weeklyPickups > 0) {
+        const usedFree = await this.prisma.order.count({
+          where: {
+            customerId: customer.id,
+            freeLogisticsApplied: true,
+            status: { not: 'CANCELLED' },
+            createdAt: { gte: weekStart },
+          },
+        });
+        freeLogisticsApplied = usedFree < activePlan.weeklyPickups;
+      }
+    }
+
     const price = computePricing({
       items: lines,
       weightLb: tier ? new D(tier.estimatedWeightLb) : undefined,
       pricePerPound,
       extras: extras.map((e) => new D(e.price)),
-      membershipPercent: plan?.active ? new D(plan.garmentDiscountPercent) : new D(0),
+      membershipPercent: activePlan ? new D(activePlan.garmentDiscountPercent) : new D(0),
       promotion:
-        promotion && this.promotionApplies(promotion, new Date())
+        promotion && this.promotionApplies(promotion, now)
           ? { type: promotion.discountType, value: new D(promotion.discountValue) }
           : null,
-      logisticsFee: pickupFee.add(deliveryFee),
+      logisticsFee: freeLogisticsApplied ? new D(0) : pickupFee.add(deliveryFee),
       taxRate,
       taxIncluded,
     });
     if (promotion) {
-      if (!this.promotionApplies(promotion, new Date()))
+      if (!this.promotionApplies(promotion, now))
         throw new UnprocessableEntityException('La promoción no está vigente.');
       if (promotion.minOrderAmount && price.merchandiseNet.add(price.discount).lt(promotion.minOrderAmount))
         throw new UnprocessableEntityException(
@@ -242,6 +275,22 @@ export class OrdersService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        if (freeLogisticsApplied && activePlan?.weeklyPickups != null && activePlan.weeklyPickups > 0) {
+          await this.wallet.lockCustomer(tx, customer.id);
+          const usedInTx = await tx.order.count({
+            where: {
+              customerId: customer.id,
+              freeLogisticsApplied: true,
+              status: { not: 'CANCELLED' },
+              createdAt: { gte: weekStart },
+            },
+          });
+          if (usedInTx >= activePlan.weeklyPickups) {
+            throw new ConflictException(
+              'Se agotaron tus envíos gratis semanales. Reintenta para recalcular.',
+            );
+          }
+        }
         if (promotion?.maxUses) {
           // Bloquea la promoción para que usos simultáneos no superen el máximo.
           await tx.$queryRaw`SELECT id FROM "Promotion" WHERE id = ${promotion.id}::uuid FOR UPDATE`;
@@ -257,6 +306,7 @@ export class OrdersService {
             facilityId: facility.id,
             mode: dto.mode,
             status: 'PAYMENT_PENDING',
+            priority: Boolean(activePlan?.priorityService),
             notes: dto.notes?.trim(),
             pricingModel: perWeight ? 'PER_WEIGHT' : 'FIXED',
             pricingStatus: perWeight ? 'PENDING_WEIGHT' : 'CALCULATED',
@@ -270,6 +320,7 @@ export class OrdersService {
             discount: price.discount,
             membershipDiscount: price.membershipDiscount,
             logisticsFee: price.logisticsFee,
+            freeLogisticsApplied,
             tax: price.tax,
             total: price.total,
             policyVersion: policy.version,

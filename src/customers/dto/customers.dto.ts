@@ -23,4 +23,9 @@ export class SetMembershipDto {
   @IsUUID() planId: string;
 }
 
+export class AdminSetMembershipDto {
+  @IsOptional() @IsUUID() planId?: string | null;
+  @IsOptional() @IsString() @MaxLength(300) reason?: string;
+}
+
 export class UpdateAddressDto extends PartialType(CreateAddressDto) {}
