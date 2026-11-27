@@ -209,6 +209,18 @@ enum IncidentStatus {
   CLOSED
 }
 
+enum MembershipInterval {
+  MONTHLY
+  QUARTERLY
+  YEARLY
+}
+
+enum MembershipStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+}
+
 // ---------------------------------------------------------------- Identidad
 
 model User {
@@ -275,25 +287,29 @@ model Customer {
   kycSubmissions     Int             @default(0)
   kycReviewedById    String?         @db.Uuid
   kycReviewedAt      DateTime?
-  membershipPlanId   String?         @db.Uuid
-  membershipPlan     MembershipPlan? @relation(fields: [membershipPlanId], references: [id])
-  billingName        String?
-  billingTaxId       String?
-  billingEmail       String?
-  billingPhone       String?
-  billingAddress     String?
-  createdAt          DateTime        @default(now())
-  updatedAt          DateTime        @updatedAt
+  membershipPlanId        String?                  @db.Uuid
+  membershipPlan          MembershipPlan?          @relation(fields: [membershipPlanId], references: [id])
+  membershipStartedAt     DateTime?
+  membershipExpiresAt     DateTime?
+  membershipStatus        MembershipStatus?
+  billingName             String?
+  billingTaxId            String?
+  billingEmail            String?
+  billingPhone            String?
+  billingAddress          String?
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
 
-  kycDocuments   KycDocument[]
-  addresses      Address[]
-  orders         Order[]
-  ledger         LedgerEntry[]
-  paymentMethods PaymentMethod[]
-  charges        CustomerCharge[]
-  points         PointsLedgerEntry[]
-  redemptions    RewardRedemption[]
-  notifications  Notification[]
+  kycDocuments            KycDocument[]
+  addresses               Address[]
+  orders                  Order[]
+  ledger                  LedgerEntry[]
+  paymentMethods          PaymentMethod[]
+  charges                 CustomerCharge[]
+  points                  PointsLedgerEntry[]
+  redemptions             RewardRedemption[]
+  notifications           Notification[]
+  membershipSubscriptions MembershipSubscription[]
 
   @@index([kycStatus])
 }
@@ -466,13 +482,16 @@ model KycDocument {
 }
 
 model GarmentType {
-  id        String   @id @default(uuid()) @db.Uuid
-  name      String   @unique
-  basePrice Decimal  @db.Decimal(12, 2)
-  icon      String?
-  active    Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String   @unique
+  description    String?
+  category       String?
+  estimatedHours Int?
+  basePrice      Decimal  @db.Decimal(12, 2)
+  icon           String?
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   items OrderItem[]
 }
@@ -547,17 +566,42 @@ model Promotion {
 }
 
 model MembershipPlan {
-  id                     String   @id @default(uuid()) @db.Uuid
-  name                   String   @unique
-  priceMonthly           Decimal  @db.Decimal(12, 2)
+  id                     String             @id @default(uuid()) @db.Uuid
+  name                   String             @unique
+  description            String?
+  priceMonthly           Decimal            @db.Decimal(12, 2)
+  interval               MembershipInterval @default(MONTHLY)
+  includedWeight         Decimal?           @db.Decimal(10, 2)
+  weightUnit             String             @default("KG")
   weeklyPickups          Int?
-  garmentDiscountPercent Decimal  @db.Decimal(5, 2)
+  garmentDiscountPercent Decimal            @db.Decimal(5, 2)
+  priorityService        Boolean            @default(false)
   benefits               String[]
-  active                 Boolean  @default(true)
-  createdAt              DateTime @default(now())
-  updatedAt              DateTime @updatedAt
+  active                 Boolean            @default(true)
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
 
-  customers Customer[]
+  customers     Customer[]
+  subscriptions MembershipSubscription[]
+}
+
+model MembershipSubscription {
+  id           String           @id @default(uuid()) @db.Uuid
+  customerId   String           @db.Uuid
+  customer     Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  planId       String           @db.Uuid
+  plan         MembershipPlan   @relation(fields: [planId], references: [id])
+  status       MembershipStatus @default(ACTIVE)
+  priceCharged Decimal          @db.Decimal(12, 2)
+  startedAt    DateTime         @default(now())
+  expiresAt    DateTime
+  cancelledAt  DateTime?
+  assignedById String?          @db.Uuid
+  notes        String?
+  createdAt    DateTime         @default(now())
+
+  @@index([customerId, status])
+  @@index([planId, status])
 }
 
 model Reward {
@@ -657,8 +701,9 @@ model Order {
   extrasTotal        Decimal            @default(0) @db.Decimal(12, 2)
   discount           Decimal            @default(0) @db.Decimal(12, 2)
   membershipDiscount Decimal            @default(0) @db.Decimal(12, 2)
-  logisticsFee       Decimal            @default(0) @db.Decimal(12, 2)
-  tax                Decimal            @default(0) @db.Decimal(12, 2)
+  logisticsFee         Decimal            @default(0) @db.Decimal(12, 2)
+  freeLogisticsApplied Boolean            @default(false)
+  tax                  Decimal            @default(0) @db.Decimal(12, 2)
   total              Decimal            @default(0) @db.Decimal(12, 2)
   policyVersion      Int
 
