@@ -89,8 +89,10 @@ const MATRIX: [string, string, Role[] | 'ANY'][] = [
   ['get', '/redemptions', ['CLIENT', 'ADMIN', 'SUPERVISOR']],
   ['post', `/redemptions/${ID}/review`, ['ADMIN', 'SUPERVISOR']],
   ['post', `/incidents/${ID}/status`, ['ADMIN', 'SUPERVISOR']],
-  ['get', '/notifications', ['CLIENT']],
-  ['post', '/notifications/read-all', ['CLIENT']],
+  ['get', '/notifications', 'ANY'],
+  ['post', '/notifications/read-all', 'ANY'],
+  ['post', '/notifications/devices', 'ANY'],
+  ['delete', '/notifications/devices', 'ANY'],
 ];
 
 let t: TestApp;
