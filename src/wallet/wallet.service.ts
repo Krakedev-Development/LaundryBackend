@@ -1,7 +1,9 @@
 import {
   ConflictException,
+  Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import type { AuthUser } from '../common/decorators/auth.decorators';
 import { CustomersService } from '../customers/customers.service';
@@ -29,6 +31,7 @@ export interface LedgerPost {
 export class WalletService {
   constructor(
     private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => CustomersService))
     private readonly customers: CustomersService,
   ) {}
 
