@@ -373,15 +373,25 @@ export class CustomersService {
       },
     });
     const ids = customers.map((c) => c.id);
-    const balances = ids.length
-      ? await this.prisma.ledgerEntry.groupBy({
-          by: ['customerId'],
-          where: { customerId: { in: ids } },
-          _sum: { amount: true },
-        })
-      : [];
+    const [balances, pointBalances] = ids.length
+      ? await Promise.all([
+          this.prisma.ledgerEntry.groupBy({
+            by: ['customerId'],
+            where: { customerId: { in: ids } },
+            _sum: { amount: true },
+          }),
+          this.prisma.pointsLedgerEntry.groupBy({
+            by: ['customerId'],
+            where: { customerId: { in: ids } },
+            _sum: { points: true },
+          }),
+        ])
+      : [[], []];
     const balanceByCustomer = new Map(
       balances.map((b) => [b.customerId, Number(b._sum.amount ?? 0)]),
+    );
+    const pointsByCustomer = new Map(
+      pointBalances.map((p) => [p.customerId, Number(p._sum.points ?? 0)]),
     );
 
     return customers.map((c) => {
@@ -397,6 +407,7 @@ export class CustomersService {
         membershipStartedAt: c.membershipStartedAt,
         membershipExpiresAt: c.membershipExpiresAt,
         walletBalance: balanceByCustomer.get(c.id) ?? 0,
+        pointsBalance: pointsByCustomer.get(c.id) ?? 0,
         kycDocumentType: c.kycDocumentType,
         kycDocumentNumber: c.kycDocumentNumber,
         kycRejectionReason: c.kycRejectionReason,

@@ -94,6 +94,7 @@ export class CreatePromotionDto {
     message: 'El código admite A-Z, 0-9, guion y guion bajo (3 a 32).',
   })
   code: string;
+  @IsOptional() @IsString() @MaxLength(120) name?: string | null;
   @IsOptional() @IsString() @MaxLength(300) description?: string;
   @IsIn(['PERCENTAGE', 'FIXED']) discountType: 'PERCENTAGE' | 'FIXED';
   @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) discountValue: number;
@@ -101,15 +102,25 @@ export class CreatePromotionDto {
   @IsOptional() @Type(() => Date) @IsDate() validFrom?: Date;
   @IsOptional() @Type(() => Date) @IsDate() validUntil?: Date;
   @IsOptional() @IsInt() @Min(1) maxUses?: number;
+  @IsOptional() @IsInt() @Min(1) maxUsesPerCustomer?: number | null;
+  @IsOptional() @IsBoolean() firstOrderOnly?: boolean;
 }
 // El código y el tipo de descuento no cambian: pedidos existentes los referencian.
 export class UpdatePromotionDto extends Activatable {
+  @IsOptional() @IsString() @MaxLength(120) name?: string | null;
   @IsOptional() @IsString() @MaxLength(300) description?: string;
   @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) discountValue?: number;
   @IsOptional() @money() minOrderAmount?: number;
   @IsOptional() @Type(() => Date) @IsDate() validFrom?: Date;
   @IsOptional() @Type(() => Date) @IsDate() validUntil?: Date;
   @IsOptional() @IsInt() @Min(1) maxUses?: number;
+  @IsOptional() @IsInt() @Min(1) maxUsesPerCustomer?: number | null;
+  @IsOptional() @IsBoolean() firstOrderOnly?: boolean;
+}
+
+export class ValidatePromotionDto {
+  @IsString() @IsNotEmpty() @MaxLength(32) code: string;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) subtotal?: number;
 }
 
 export class CreateMembershipPlanDto {
@@ -133,6 +144,15 @@ export class CreateRewardDto {
   @IsOptional() @IsString() @MaxLength(300) description?: string;
   @IsOptional() @IsString() @MaxLength(60) category?: string;
   @IsInt() @Min(1) pointsCost: number;
+  @IsOptional() @IsIn(['NONE', 'WALLET_CREDIT', 'PROMO_COUPON']) fulfillmentType?:
+    | 'NONE'
+    | 'WALLET_CREDIT'
+    | 'PROMO_COUPON';
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) walletCreditAmount?: number | null;
+  @IsOptional() @IsIn(['PERCENTAGE', 'FIXED']) couponDiscountType?: 'PERCENTAGE' | 'FIXED' | null;
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }) @Min(0.01) couponDiscountValue?: number | null;
+  @IsOptional() @money() couponMinOrderAmount?: number | null;
+  @IsOptional() @IsInt() @Min(1) @Max(365) couponValidityDays?: number | null;
 }
 export class UpdateRewardDto extends PartialType(CreateRewardDto) {
   @IsOptional() @IsBoolean() active?: boolean;

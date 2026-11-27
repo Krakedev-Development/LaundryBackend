@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import {
   IsBoolean,
+  IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   IsUUID,
@@ -30,6 +32,12 @@ class ReviewRedemptionDto {
   @IsOptional() @IsString() @MaxLength(300) reason?: string;
 }
 
+class AdjustPointsDto {
+  @IsUUID() customerId: string;
+  @IsInt() points: number;
+  @IsString() @IsNotEmpty() @MaxLength(300) reason: string;
+}
+
 @Controller()
 export class PointsController {
   constructor(private readonly points: PointsService) {}
@@ -44,6 +52,18 @@ export class PointsController {
   @Post('points/redeem')
   redeem(@CurrentUser() user: AuthUser, @Body() dto: RedeemDto) {
     return this.points.redeem(user, dto.rewardId);
+  }
+
+  @Roles('ADMIN', 'SUPERVISOR')
+  @Get('customers/:id/points')
+  customerPoints(@Param('id', ParseUUIDPipe) id: string) {
+    return this.points.customerLedger(id);
+  }
+
+  @Roles('ADMIN')
+  @Post('points/adjust')
+  adjust(@CurrentUser() actor: AuthUser, @Body() dto: AdjustPointsDto) {
+    return this.points.adjust(actor, dto);
   }
 
   // Cliente: sus solicitudes. Personal: todas, filtrables por estado.

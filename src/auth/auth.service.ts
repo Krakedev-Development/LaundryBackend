@@ -47,10 +47,12 @@ export interface PublicUser {
   membershipStatus: MembershipStatus | null;
   membershipStartedAt: Date | null;
   membershipExpiresAt: Date | null;
+  pointsBalance: number | null;
 }
 
 // Datos del cliente que viajan con el usuario público.
 const CUSTOMER_PUBLIC = {
+  id: true,
   kycStatus: true,
   membershipPlanId: true,
   membershipStatus: true,
@@ -66,6 +68,7 @@ export function toPublic(
   membershipStatus: MembershipStatus | null = null,
   membershipStartedAt: Date | null = null,
   membershipExpiresAt: Date | null = null,
+  pointsBalance: number | null = null,
 ): PublicUser {
   return {
     id: user.id,
@@ -79,6 +82,7 @@ export function toPublic(
     membershipStatus,
     membershipStartedAt,
     membershipExpiresAt,
+    pointsBalance,
   };
 }
 
@@ -144,7 +148,7 @@ export class AuthService {
       },
     });
     return {
-      user: toPublic(user, 'NOT_SUBMITTED', null),
+      user: toPublic(user, 'NOT_SUBMITTED', null, null, null, null, 0),
       tokens: await this.issueTokens(user),
     };
   }
@@ -172,6 +176,9 @@ export class AuthService {
         },
       });
     const membership = publicMembership(user.customer);
+    const pointsBalance = user.customer
+      ? await this.customerPointsBalance(user.customer.id)
+      : null;
     return {
       user: toPublic(
         user,
@@ -180,6 +187,7 @@ export class AuthService {
         membership.membershipStatus,
         membership.membershipStartedAt,
         membership.membershipExpiresAt,
+        pointsBalance,
       ),
       tokens: await this.issueTokens(user),
     };
@@ -349,6 +357,9 @@ export class AuthService {
       include: { customer: { select: CUSTOMER_PUBLIC } },
     });
     const membership = publicMembership(user.customer);
+    const pointsBalance = user.customer
+      ? await this.customerPointsBalance(user.customer.id)
+      : null;
     return toPublic(
       user,
       user.customer?.kycStatus ?? null,
@@ -356,7 +367,16 @@ export class AuthService {
       membership.membershipStatus,
       membership.membershipStartedAt,
       membership.membershipExpiresAt,
+      pointsBalance,
     );
+  }
+
+  private async customerPointsBalance(customerId: string): Promise<number> {
+    const { _sum } = await this.prisma.pointsLedgerEntry.aggregate({
+      where: { customerId },
+      _sum: { points: true },
+    });
+    return _sum.points ?? 0;
   }
 
   private revokeAll(userId: string) {

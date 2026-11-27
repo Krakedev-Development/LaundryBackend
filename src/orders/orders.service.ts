@@ -208,7 +208,7 @@ export class OrdersService {
       : [];
     const now = new Date();
     const promotion = dto.promotionCode
-      ? await this.findPromotion(dto.promotionCode)
+      ? await this.findPromotion(dto.promotionCode, customer.id)
       : null;
     const plan =
       isMembershipActive(customer, now) && customer.membershipPlanId
@@ -262,6 +262,28 @@ export class OrdersService {
     if (promotion) {
       if (!this.promotionApplies(promotion, now))
         throw new UnprocessableEntityException('La promoción no está vigente.');
+      if (promotion.firstOrderOnly) {
+        const prior = await this.prisma.order.count({
+          where: { customerId: customer.id, status: { not: 'CANCELLED' } },
+        });
+        if (prior > 0)
+          throw new UnprocessableEntityException(
+            'Esta promoción aplica únicamente para tu primera orden.',
+          );
+      }
+      if (promotion.maxUsesPerCustomer != null) {
+        const usedByCustomer = await this.prisma.order.count({
+          where: {
+            promotionId: promotion.id,
+            customerId: customer.id,
+            status: { not: 'CANCELLED' },
+          },
+        });
+        if (usedByCustomer >= promotion.maxUsesPerCustomer)
+          throw new UnprocessableEntityException(
+            'Ya alcanzaste el límite de usos para esta promoción.',
+          );
+      }
       if (promotion.minOrderAmount && price.merchandiseNet.add(price.discount).lt(promotion.minOrderAmount))
         throw new UnprocessableEntityException(
           `La promoción requiere un monto mínimo de ${promotion.minOrderAmount.toString()}.`,
@@ -275,8 +297,13 @@ export class OrdersService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-        if (freeLogisticsApplied && activePlan?.weeklyPickups != null && activePlan.weeklyPickups > 0) {
+        const needsCustomerLock =
+          (freeLogisticsApplied && activePlan?.weeklyPickups != null && activePlan.weeklyPickups > 0) ||
+          Boolean(promotion && (promotion.maxUsesPerCustomer != null || promotion.firstOrderOnly));
+        if (needsCustomerLock) {
           await this.wallet.lockCustomer(tx, customer.id);
+        }
+        if (freeLogisticsApplied && activePlan?.weeklyPickups != null && activePlan.weeklyPickups > 0) {
           const usedInTx = await tx.order.count({
             where: {
               customerId: customer.id,
@@ -291,14 +318,38 @@ export class OrdersService {
             );
           }
         }
-        if (promotion?.maxUses) {
-          // Bloquea la promoción para que usos simultáneos no superen el máximo.
-          await tx.$queryRaw`SELECT id FROM "Promotion" WHERE id = ${promotion.id}::uuid FOR UPDATE`;
-          const used = await tx.order.count({
-            where: { promotionId: promotion.id, status: { not: 'CANCELLED' } },
-          });
-          if (used >= promotion.maxUses)
-            throw new UnprocessableEntityException('La promoción alcanzó su máximo de usos.');
+        if (promotion) {
+          if (promotion.maxUses) {
+            // Bloquea la promoción para que usos simultáneos no superen el máximo.
+            await tx.$queryRaw`SELECT id FROM "Promotion" WHERE id = ${promotion.id}::uuid FOR UPDATE`;
+            const used = await tx.order.count({
+              where: { promotionId: promotion.id, status: { not: 'CANCELLED' } },
+            });
+            if (used >= promotion.maxUses)
+              throw new UnprocessableEntityException('La promoción alcanzó su máximo de usos.');
+          }
+          if (promotion.firstOrderOnly) {
+            const prior = await tx.order.count({
+              where: { customerId: customer.id, status: { not: 'CANCELLED' } },
+            });
+            if (prior > 0)
+              throw new UnprocessableEntityException(
+                'Esta promoción aplica únicamente para tu primera orden.',
+              );
+          }
+          if (promotion.maxUsesPerCustomer != null) {
+            const usedByCustomer = await tx.order.count({
+              where: {
+                promotionId: promotion.id,
+                customerId: customer.id,
+                status: { not: 'CANCELLED' },
+              },
+            });
+            if (usedByCustomer >= promotion.maxUsesPerCustomer)
+              throw new UnprocessableEntityException(
+                'Ya alcanzaste el límite de usos para esta promoción.',
+              );
+          }
         }
         const order = await tx.order.create({
           data: {
@@ -1405,9 +1456,11 @@ export class OrdersService {
     return tier;
   }
 
-  private async findPromotion(code: string) {
-    const promo = await this.prisma.promotion.findUnique({ where: { code: code.toUpperCase() } });
-    if (!promo || !promo.active) throw new NotFoundException('La promoción no existe.');
+  private async findPromotion(code: string, customerId: string) {
+    const promo = await this.prisma.promotion.findUnique({ where: { code: code.trim().toUpperCase() } });
+    if (!promo || !promo.active || (promo.customerId && promo.customerId !== customerId)) {
+      throw new NotFoundException('La promoción no existe.');
+    }
     return promo;
   }
 

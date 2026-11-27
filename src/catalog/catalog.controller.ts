@@ -31,6 +31,7 @@ import {
   UpdateServiceTypeDto,
   UpdateWeightRestrictionDto,
   UpdateWeightTierDto,
+  ValidatePromotionDto,
 } from './dto/catalog.dto';
 
 const isAdmin = (u?: AuthUser) => u?.role === 'ADMIN';
@@ -186,7 +187,7 @@ export class CatalogController {
   @Roles('ADMIN')
   @Post('rewards')
   createReward(@CurrentUser() u: AuthUser, @Body() dto: CreateRewardDto) {
-    return this.catalog.create(u, 'reward', { ...dto });
+    return this.catalog.createReward(u, dto);
   }
   @Roles('ADMIN')
   @Patch('rewards/:id')
@@ -195,14 +196,19 @@ export class CatalogController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateRewardDto,
   ) {
-    return this.catalog.update(u, 'reward', id, { ...dto });
+    return this.catalog.updateReward(u, id, dto);
   }
 
   // ---- Promociones
   @Public()
   @Get('promotions')
-  promotions() {
-    return this.catalog.listPromotions();
+  promotions(@CurrentUser() u?: AuthUser) {
+    return this.catalog.listPromotions(u);
+  }
+  @Roles('CLIENT')
+  @Post('promotions/validate')
+  validatePromotion(@CurrentUser() u: AuthUser, @Body() dto: ValidatePromotionDto) {
+    return this.catalog.validatePromotion(u, dto);
   }
   @Roles('ADMIN')
   @Post('promotions')
