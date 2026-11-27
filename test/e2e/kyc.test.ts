@@ -309,6 +309,10 @@ describe('directorio de clientes y membresía', () => {
 
     await t.http.put(`${api}/customers/me/membership`).set(bearer(c.token))
       .send({ planId: '00000000-0000-4000-8000-000000000000' }).expect(404);
+    // Sin saldo suficiente en la billetera no puede activar un plan pagado.
+    await t.http.put(`${api}/customers/me/membership`).set(bearer(c.token))
+      .send({ planId: plan.id }).expect(409);
+    await w.credit(c.customerId, 50);
     await t.http.put(`${api}/customers/me/membership`).set(bearer(c.token))
       .send({ planId: plan.id }).expect(200);
 
@@ -317,6 +321,7 @@ describe('directorio de clientes y membresía', () => {
       (r: { id: string }) => r.id === c.customerId,
     );
     assert.equal(after.membershipPlan.name, 'Plan de prueba');
+    assert.equal(after.walletBalance, 37.5);
 
     // Un cliente sin verificación aprobada no puede elegir plan.
     const pending = await w.newPendingClient('pendiente-plan@test.local');
